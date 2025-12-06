@@ -18,6 +18,12 @@ expo-env.d.ts
 *.key
 *.mobileprovision
 
+# Ignore PNG, TTF, and TXT files inside assets/
+assets/**/*.png
+assets/**/*.ttf
+assets/**/*.txt
+
+
 # Metro
 .metro-health-check*
 

@@ -1,7 +1,7 @@
 // app/(surahs)/[surahId].tsx
 import { Stack, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { Text, View } from "react-native";
+import { View } from "react-native";
 
 import ready from "../../assets/data/quran-ready.json";
 import QuranPageView from "../../components/QuranPageView";
@@ -17,7 +17,7 @@ export default function SurahScreen() {
   const { surahId } = useLocalSearchParams<{ surahId?: string }>();
   const id = Number(surahId ?? 1); // chapter number 1..114
 
-  const surahName = ARABIC_SURAHS[id];
+  const surahNameFromRoute = ARABIC_SURAHS[id];
 
   // First page number of this surah from surahMap
   const firstPageNumber = useMemo(() => {
@@ -48,28 +48,24 @@ export default function SurahScreen() {
     setPageIndex((prev) => (prev > 0 ? prev - 1 : prev));
   };
 
+  // NEW: jump directly to first page of a given surah
+  const handleJumpToSurah = (targetSurahId: number) => {
+    const startPageNumber = SURAH_MAP[String(targetSurahId)];
+    if (!startPageNumber) return;
+
+    const idx = PAGES.findIndex((p) => p.pageNumber === startPageNumber);
+    if (idx === -1) return;
+
+    setPageIndex(idx);
+  };
+
+  // Use current page's surah name for the title (so it updates when we jump)
+  const currentSurahName =
+    page?.verses?.[0]?.surah ?? surahNameFromRoute ?? "الفاتحة";
+
   return (
     <View style={{ flex: 1, backgroundColor: "#FFFDF5" }}>
       <Stack.Screen options={{ headerShown: false }} />
-
-      {/* Optional: Surah title using the Arabic names constant */}
-      <View
-        style={{
-          paddingTop: 40,
-          paddingBottom: 8,
-          alignItems: "center",
-        }}
-      >
-        <Text
-          style={{
-            fontFamily: "Amiri",
-            fontSize: 20,
-            color: "#1F1F1F",
-          }}
-        >
-          سورة {surahName}
-        </Text>
-      </View>
 
       {/* Quran page view (handles gestures: pinch, swipe, double-tap) */}
       <View style={{ flex: 1 }}>
@@ -77,6 +73,7 @@ export default function SurahScreen() {
           page={page}
           onNextPage={handleNextPage}
           onPrevPage={handlePrevPage}
+          onJumpToSurah={handleJumpToSurah} // <-- pass to mini-view slider
         />
       </View>
     </View>

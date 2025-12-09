@@ -1,9 +1,9 @@
-// components/QuranPageView.tsx
 import React, { useEffect, useRef, useState } from "react";
-import { Dimensions, Pressable, Text, View } from "react-native";
+import { Dimensions, Pressable, ScrollView, Text, View } from "react-native";
 import { FONTS } from "../constants/theme";
 import { ReadyPage } from "../utils/quranProcessor";
 
+import { useRouter } from "expo-router";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   runOnJS,
@@ -11,6 +11,7 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
+import { ARABIC_SURAHS } from "../constants/surahNames";
 import { toArabicNumber } from "../utils/toArabicNumbers";
 
 const { width } = Dimensions.get("window");
@@ -20,14 +21,34 @@ interface Props {
   page: ReadyPage;
   onNextPage?: () => void;
   onPrevPage?: () => void;
+  onJumpToSurah?: (surahId: number) => void;
 }
 
-export default function QuranPageView({ page, onNextPage, onPrevPage }: Props) {
+export default function QuranPageView({
+  page,
+  onNextPage,
+  onPrevPage,
+  onJumpToSurah,
+}: Props) {
   if (!page || !page.verses || page.verses.length === 0) return null;
 
   const firstVerse = page.verses[0];
   const surahName = firstVerse.surah;
   const juzNumber = Math.ceil(page.pageNumber / 20);
+  const SURAHS = ARABIC_SURAHS.map((name, i) => ({ id: i, name })).filter(
+    (s) => s.id > 0
+  );
+  const router = useRouter();
+  const currentSurahId = ARABIC_SURAHS.findIndex((n) => n === surahName);
+  const currentSurahIndex = SURAHS.findIndex((s) => s.name === surahName);
+
+  const prevSurah =
+    currentSurahIndex > 0 ? SURAHS[currentSurahIndex - 1] : null;
+
+  const nextSurah =
+    currentSurahIndex >= 0 && currentSurahIndex < SURAHS.length - 1
+      ? SURAHS[currentSurahIndex + 1]
+      : null;
 
   // ------- MODE: full vs mini -------
   const [isMini, setIsMini] = useState(false);
@@ -48,17 +69,25 @@ export default function QuranPageView({ page, onNextPage, onPrevPage }: Props) {
     transform: [{ scale: baseScale.value * pinchScale.value }],
   }));
 
-  // ------- PINCH (zoom) – only in full mode -------
   const pinch = Gesture.Pinch()
     .enabled(!isMini)
     .onUpdate((event) => {
       let next = event.scale;
-      if (next < 0.8) next = 0.8;
+
+      // allow more shrinking so user can "pull" the page small
+      if (next < 0.5) next = 0.5;
       if (next > 3) next = 3;
+
       pinchScale.value = next;
     })
     .onEnd(() => {
-      if (pinchScale.value < 1) {
+      // Condition that means: "User pinched out enough to want mini mode"
+      if (pinchScale.value < 0.7) {
+        pinchScale.value = 1; // reset zoom
+        runOnJS(setIsMini)(true); // 🔥 switch to mini mode
+      }
+      // Small pinch-out → snap back to full
+      else if (pinchScale.value < 1) {
         pinchScale.value = withTiming(1, { duration: 180 });
       }
     });
@@ -70,12 +99,12 @@ export default function QuranPageView({ page, onNextPage, onPrevPage }: Props) {
       const dx = event.translationX;
 
       // 👉 swipe left → NEXT page
-      if (dx < -60 && onNextPage) {
-        runOnJS(onNextPage)();
+      if (dx < -60 && onPrevPage) {
+        runOnJS(onPrevPage)();
       }
       // 👈 swipe right → PREVIOUS page
-      else if (dx > 60 && onPrevPage) {
-        runOnJS(onPrevPage)();
+      else if (dx > 60 && onNextPage) {
+        runOnJS(onNextPage)();
       }
     });
 
@@ -96,6 +125,7 @@ export default function QuranPageView({ page, onNextPage, onPrevPage }: Props) {
 
   return (
     <View className="flex-1 bg-[#FFFDF5]">
+      {/* MAIN PAGE (scaled) */}
       <GestureDetector gesture={gesture}>
         <Pressable className="flex-1" onPress={handlePress}>
           <AnimatedView className="flex-1 items-center justify-center">
@@ -183,56 +213,135 @@ export default function QuranPageView({ page, onNextPage, onPrevPage }: Props) {
                 </View>
               </View>
             </AnimatedView>
-
-            {/* MINI MODE CONTROLS OVERLAY */}
-            {isMini && (
-              <View className="absolute bottom-10 inset-x-0 items-center">
-                <View className="flex-row items-center bg-white/95 rounded-full px-4 py-2 gap-4 shadow">
-                  <Pressable
-                    disabled={!onPrevPage}
-                    onPress={onPrevPage}
-                    className="px-3 py-1"
-                  >
-                    <Text
-                      className="text-[16px] text-[#2E8B57]"
-                      style={{ fontFamily: FONTS.arabic }}
-                    >
-                      السابق
-                    </Text>
-                  </Pressable>
-
-                  <Text
-                    className="text-[16px] text-[#1F1F1F]"
-                    style={{ fontFamily: FONTS.arabic }}
-                  >
-                    صفحة {toArabicNumber(page.pageNumber)}
-                  </Text>
-
-                  <Pressable
-                    disabled={!onNextPage}
-                    onPress={onNextPage}
-                    className="px-3 py-1"
-                  >
-                    <Text
-                      className="text-[16px] text-[#2E8B57]"
-                      style={{ fontFamily: FONTS.arabic }}
-                    >
-                      التالي
-                    </Text>
-                  </Pressable>
-                </View>
-
-                <Text
-                  className="mt-2 text-[12px] text-[#666]"
-                  style={{ fontFamily: FONTS.arabic }}
-                >
-                  اضغط ضغطتين في أي مكان للتبديل بين وضع القراءة والوضع المصغّر
-                </Text>
-              </View>
-            )}
           </AnimatedView>
         </Pressable>
       </GestureDetector>
+
+      {/* MINI MODE CONTROLS – OUTSIDE THE SCALED VIEW */}
+      {/* MINI MODE CONTROLS – OUTSIDE THE SCALED VIEW */}
+      {isMini && (
+        <>
+          {/* TOP AREA: search + surah slider (stick to top) */}
+          <View
+            pointerEvents="box-none"
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              top: 40,
+              alignItems: "center",
+              zIndex: 50,
+            }}
+          >
+            {/* SEARCH BAR (UI only for now) */}
+            <View className="w-[90%] mb-3">
+              <View className="flex-row-reverse items-center bg-[#F4EFE4] rounded-3xl px-4 py-2">
+                <Text
+                  className="flex-1 text-right text-[#999]"
+                  style={{ fontFamily: FONTS.arabic }}
+                >
+                  ابحث في القرآن...
+                </Text>
+              </View>
+            </View>
+
+            {/* SURAH SLIDER – all ١١٤ سور, horizontally scrollable */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{
+                flexDirection: "row-reverse",
+                alignItems: "center",
+                paddingHorizontal: 24,
+              }}
+            >
+              {SURAHS.map((s) => {
+                const active = s.name === surahName;
+                return (
+                  <Pressable
+                    key={s.id}
+                    onPress={() => onJumpToSurah && onJumpToSurah(s.id)}
+                    className="items-center mx-3"
+                  >
+                    <Text
+                      className={
+                        active
+                          ? "text-[20px] text-[#C79A3A]"
+                          : "text-[18px] text-[#1F1F1F]"
+                      }
+                      style={{ fontFamily: FONTS.arabic }}
+                    >
+                      {s.name}
+                    </Text>
+
+                    {/* underline / dot for active surah */}
+                    <View className="h-[3px] w-10 mt-1 rounded-full bg-transparent">
+                      {active && (
+                        <View className="h-[3px] w-full bg-[#C79A3A] rounded-full" />
+                      )}
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          {/* BOTTOM PAGE CONTROLS – stick to bottom */}
+          <View
+            pointerEvents="box-none"
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 40,
+              alignItems: "center",
+              zIndex: 50,
+            }}
+          >
+            <View className="flex-row items-center bg-white/95 rounded-full px-4 py-2 gap-4 shadow">
+              <Pressable
+                disabled={!onPrevPage}
+                onPress={onPrevPage}
+                className="px-3 py-1"
+              >
+                <Text
+                  className="text-[16px] text-[#2E8B57]"
+                  style={{ fontFamily: FONTS.arabic }}
+                >
+                  السابق
+                </Text>
+              </Pressable>
+
+              <Text
+                className="text-[16px] text-[#1F1F1F]"
+                style={{ fontFamily: FONTS.arabic }}
+              >
+                صفحة {toArabicNumber(page.pageNumber)}
+              </Text>
+
+              <Pressable
+                disabled={!onNextPage}
+                onPress={onNextPage}
+                className="px-3 py-1"
+              >
+                <Text
+                  className="text-[16px] text-[#2E8B57]"
+                  style={{ fontFamily: FONTS.arabic }}
+                >
+                  التالي
+                </Text>
+              </Pressable>
+            </View>
+
+            <Text
+              className="mt-2 text-[12px] text-[#666]"
+              style={{ fontFamily: FONTS.arabic }}
+            >
+              اضغط ضغطتين في أي مكان للتبديل بين وضع القراءة والوضع المصغّر
+            </Text>
+          </View>
+        </>
+      )}
     </View>
   );
 }

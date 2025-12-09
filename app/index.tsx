@@ -12,12 +12,7 @@ interface SurahItem {
 }
 
 // Surahs shown in the slider
-const FAVORITE_IDS = [1, 2, 3, 4, 18, 36, 67];
-
-const SURAHS: SurahItem[] = FAVORITE_IDS.map((id) => ({
-  id,
-  name: ARABIC_SURAHS[id],
-}));
+const SURAHS = ARABIC_SURAHS.map((name, i) => ({ id: i, name }));
 
 export default function Dashboard() {
   const router = useRouter();
@@ -55,7 +50,7 @@ export default function Dashboard() {
       {/* SURAH SLIDER */}
       <View className="h-16">
         <FlatList
-          data={SURAHS}
+          data={SURAHS.filter((s) => s.id !== 0)}
           keyExtractor={(item) => item.id.toString()}
           horizontal
           showsHorizontalScrollIndicator={false}

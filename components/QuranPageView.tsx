@@ -13,9 +13,31 @@ import Animated, {
 } from "react-native-reanimated";
 import { ARABIC_SURAHS } from "../constants/surahNames";
 import { toArabicNumber } from "../utils/toArabicNumbers";
+import SurahBanner from "./SurahBanner";
 
 const { width } = Dimensions.get("window");
 const AnimatedView = Animated.createAnimatedComponent(View);
+const ARABIC_SURAH_SET = new Set(ARABIC_SURAHS);
+
+const toArabicSurahName = (name: string) => {
+  const trimmed = name.trim();
+  if (ARABIC_SURAH_SET.has(trimmed)) return trimmed;
+
+  const emDashIndex = trimmed.indexOf("\u2014");
+  if (emDashIndex >= 0) {
+    const afterDash = trimmed.slice(emDashIndex + 1).trim();
+    if (ARABIC_SURAH_SET.has(afterDash)) return afterDash;
+  }
+
+  const arabicMatch = trimmed.match(
+    /[\u0600-\u06FF]+(?:\s+[\u0600-\u06FF]+)*/g
+  );
+  if (arabicMatch && arabicMatch.length > 0) {
+    return arabicMatch[arabicMatch.length - 1];
+  }
+
+  return trimmed;
+};
 
 interface Props {
   page: ReadyPage;
@@ -33,7 +55,7 @@ export default function QuranPageView({
   if (!page || !page.verses || page.verses.length === 0) return null;
 
   const firstVerse = page.verses[0];
-  const surahName = firstVerse.surah;
+  const surahName = toArabicSurahName(firstVerse.surah);
   const juzNumber = Math.ceil(page.pageNumber / 20);
   const SURAHS = ARABIC_SURAHS.map((name, i) => ({ id: i, name })).filter(
     (s) => s.id > 0
@@ -58,7 +80,7 @@ export default function QuranPageView({
 
   useEffect(() => {
     if (isMini) {
-      baseScale.value = withTiming(0.55, { duration: 220 });
+      baseScale.value = withTiming(0.65, { duration: 220 });
       pinchScale.value = 1;
     } else {
       baseScale.value = withTiming(1, { duration: 220 });
@@ -93,20 +115,18 @@ export default function QuranPageView({
     });
 
   // ------- PAN – swipe left/right to change page (full mode only) -------
-  const pan = Gesture.Pan()
-    .enabled(!isMini)
-    .onEnd((event) => {
-      const dx = event.translationX;
+  const pan = Gesture.Pan().onEnd((event) => {
+    const dx = event.translationX;
 
-      // 👉 swipe left → NEXT page
-      if (dx < -60 && onPrevPage) {
-        runOnJS(onPrevPage)();
-      }
-      // 👈 swipe right → PREVIOUS page
-      else if (dx > 60 && onNextPage) {
-        runOnJS(onNextPage)();
-      }
-    });
+    // 👉 swipe left → NEXT page
+    if (dx < -60 && onPrevPage) {
+      runOnJS(onPrevPage)();
+    }
+    // 👈 swipe right → PREVIOUS page
+    else if (dx > 60 && onNextPage) {
+      runOnJS(onNextPage)();
+    }
+  });
 
   const gesture = Gesture.Simultaneous(pinch, pan);
 
@@ -123,6 +143,58 @@ export default function QuranPageView({
     }
   };
 
+  const renderVerseBlocks = () => {
+    const blocks: React.ReactNode[] = [];
+    let inline: React.ReactNode[] = [];
+
+    const flushInline = (key: string) => {
+      if (inline.length === 0) return;
+      blocks.push(
+        <Text
+          key={key}
+          className="text-[24px] leading-[48px] text-justify text-[#1F1F1F]"
+          style={{ fontFamily: FONTS.arabic, writingDirection: "rtl" }}
+        >
+          {inline}
+        </Text>
+      );
+      inline = [];
+    };
+
+    page.verses.forEach((verse, index) => {
+      if (verse.isStart) {
+        flushInline(`block-${index}`);
+
+        blocks.push(
+          <View key={`surah-banner-${index}`} className="items-center my-2">
+            <SurahBanner
+              label={`سورة ${toArabicSurahName(verse.surah)}`}
+              size="lg"
+              textStyle={{ color: "#000000" }}
+            />
+          </View>
+        );
+      }
+
+      inline.push(
+        <React.Fragment key={`verse-${index}`}>
+          {verse.text}
+          <Text
+            className="text-[18px] text-[#BF8C34]"
+            style={{ fontFamily: FONTS.arabic }}
+          >
+            {" "}
+            ﴿{toArabicNumber(verse.ayah)}﴾{" "}
+          </Text>
+        </React.Fragment>
+      );
+    });
+
+    flushInline("block-final");
+
+    return blocks;
+  };
+
   return (
     <View className="flex-1 bg-[#FFFDF5]">
       {/* MAIN PAGE (scaled) */}
@@ -137,7 +209,7 @@ export default function QuranPageView({
               className="h-full justify-between"
             >
               {/* HEADER */}
-              <View className="flex-row justify-between px-5 mb-2">
+              <View className="flex-row justify-between px-5 mb-2 items-center">
                 <View className="px-3 py-1">
                   <Text
                     className="text-[18px] font-semibold text-[#1F1F1F]"
@@ -158,47 +230,7 @@ export default function QuranPageView({
 
               {/* CONTENT */}
               <View className="flex-1 px-6 justify-center">
-                <Text
-                  className="text-[24px] leading-[48px] text-justify text-[#1F1F1F]"
-                  style={{
-                    fontFamily: FONTS.arabic,
-                    writingDirection: "rtl",
-                  }}
-                >
-                  {page.verses.map((verse, index) => (
-                    <React.Fragment key={index}>
-                      {verse.isStart && (
-                        <Text
-                          className="text-[22px] font-bold text-center text-[#2E8B57] my-2"
-                          style={{ fontFamily: FONTS.arabic }}
-                        >
-                          {"\n"}سورة {verse.surah}
-                          {"\n"}
-                        </Text>
-                      )}
-
-                      {verse.isStart && !verse.isFatihaOrTawbah && (
-                        <Text
-                          className="text-[20px] text-center text-[#1F1F1F] my-1"
-                          style={{ fontFamily: FONTS.arabic }}
-                        >
-                          {"\n"}بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ{"\n"}
-                        </Text>
-                      )}
-
-                      <Text>
-                        {verse.text}
-                        <Text
-                          className="text-[18px] text-[#BF8C34]"
-                          style={{ fontFamily: FONTS.arabic }}
-                        >
-                          {" "}
-                          ﴿{toArabicNumber(verse.ayah)}﴾{" "}
-                        </Text>
-                      </Text>
-                    </React.Fragment>
-                  ))}
-                </Text>
+                {renderVerseBlocks()}
               </View>
 
               {/* FOOTER */}
@@ -263,16 +295,13 @@ export default function QuranPageView({
                     onPress={() => onJumpToSurah && onJumpToSurah(s.id)}
                     className="items-center mx-3"
                   >
-                    <Text
-                      className={
-                        active
-                          ? "text-[20px] text-[#C79A3A]"
-                          : "text-[18px] text-[#1F1F1F]"
-                      }
-                      style={{ fontFamily: FONTS.arabic }}
-                    >
-                      {s.name}
-                    </Text>
+                    <SurahBanner
+                      label={s.name}
+                      size="md"
+                      textStyle={{
+                        color: active ? "#C79A3A" : "#1F1F1F",
+                      }}
+                    />
 
                     {/* underline / dot for active surah */}
                     <View className="h-[3px] w-10 mt-1 rounded-full bg-transparent">
@@ -300,15 +329,15 @@ export default function QuranPageView({
           >
             <View className="flex-row items-center bg-white/95 rounded-full px-4 py-2 gap-4 shadow">
               <Pressable
-                disabled={!onPrevPage}
-                onPress={onPrevPage}
+                disabled={!onNextPage}
+                onPress={onNextPage}
                 className="px-3 py-1"
               >
                 <Text
                   className="text-[16px] text-[#2E8B57]"
                   style={{ fontFamily: FONTS.arabic }}
                 >
-                  السابق
+                  التالي
                 </Text>
               </Pressable>
 
@@ -320,15 +349,15 @@ export default function QuranPageView({
               </Text>
 
               <Pressable
-                disabled={!onNextPage}
-                onPress={onNextPage}
+                disabled={!onPrevPage}
+                onPress={onPrevPage}
                 className="px-3 py-1"
               >
                 <Text
                   className="text-[16px] text-[#2E8B57]"
                   style={{ fontFamily: FONTS.arabic }}
                 >
-                  التالي
+                  السابق
                 </Text>
               </Pressable>
             </View>

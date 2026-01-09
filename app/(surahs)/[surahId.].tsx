@@ -1,10 +1,12 @@
 // app/(surahs)/[surahId].tsx
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Stack, useLocalSearchParams } from "expo-router";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { View } from "react-native";
 
 import ready from "../../assets/data/quran-ready.json";
 import QuranPageView from "../../components/QuranPageView";
+import { LAST_READ_PAGE_KEY } from "../../constants/storage";
 import { ARABIC_SURAHS } from "../../constants/surahNames";
 import type { ReadyPage } from "../../utils/quranProcessor";
 
@@ -12,6 +14,10 @@ import type { ReadyPage } from "../../utils/quranProcessor";
 const readyData = ready as any;
 const PAGES = readyData.pages as ReadyPage[];
 const SURAH_MAP = readyData.surahMap as Record<string, number>;
+const FALLBACK_PAGE_INDEX = Math.max(
+  PAGES.findIndex((p) => p.pageNumber === 1),
+  0
+);
 
 export default function SurahScreen() {
   const { surahId } = useLocalSearchParams<{ surahId?: string }>();
@@ -32,13 +38,47 @@ export default function SurahScreen() {
   }, [firstPageNumber]);
 
   const [pageIndex, setPageIndex] = useState(initialIndex);
+  const hasRestoredRef = useRef(false);
 
-  // Reset index if surahId changes
   useEffect(() => {
+    let isActive = true;
+
+    const restoreLastPage = async () => {
+      try {
+        const saved = await AsyncStorage.getItem(LAST_READ_PAGE_KEY);
+        if (!isActive) return;
+
+        const savedNumber = saved ? Number(saved) : NaN;
+        const savedIndex = Number.isFinite(savedNumber)
+          ? PAGES.findIndex((p) => p.pageNumber === savedNumber)
+          : -1;
+
+        if (savedIndex >= 0) {
+          setPageIndex(savedIndex);
+        } else {
+          setPageIndex(FALLBACK_PAGE_INDEX);
+        }
+      } catch {
+        if (isActive) setPageIndex(FALLBACK_PAGE_INDEX);
+      } finally {
+        if (isActive) hasRestoredRef.current = true;
+      }
+    };
+
+    restoreLastPage();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
+  // Reset index if surahId changes after initial restore
+  useEffect(() => {
+    if (!hasRestoredRef.current) return;
     setPageIndex(initialIndex);
   }, [initialIndex]);
 
-  const page = PAGES[pageIndex];
+  const page = PAGES[pageIndex] ?? PAGES[FALLBACK_PAGE_INDEX];
 
   const handleNextPage = () => {
     setPageIndex((prev) => (prev < PAGES.length - 1 ? prev + 1 : prev));
@@ -58,6 +98,13 @@ export default function SurahScreen() {
 
     setPageIndex(idx);
   };
+
+  useEffect(() => {
+    if (!page?.pageNumber) return;
+    AsyncStorage.setItem(LAST_READ_PAGE_KEY, String(page.pageNumber)).catch(
+      () => {}
+    );
+  }, [page?.pageNumber]);
 
   // Use current page's surah name for the title (so it updates when we jump)
   const currentSurahName =

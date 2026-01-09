@@ -1,8 +1,19 @@
 // app/index.tsx
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { Stack, useRouter } from "expo-router";
-import React from "react";
-import { FlatList, Pressable, Text, TextInput, View } from "react-native";
+import React, { useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import ready from "../assets/data/quran-ready.json";
+import SurahBanner from "../components/SurahBanner";
+import { LAST_READ_PAGE_KEY } from "../constants/storage";
 import { ARABIC_SURAHS } from "../constants/surahNames";
 import { toArabicNumber } from "../utils/toArabicNumbers";
 
@@ -13,9 +24,66 @@ interface SurahItem {
 
 // Surahs shown in the slider
 const SURAHS = ARABIC_SURAHS.map((name, i) => ({ id: i, name }));
+const readyData = ready as any;
+const SURAH_MAP = readyData.surahMap as Record<string, number>;
+const SURAH_STARTS = Object.entries(SURAH_MAP)
+  .map(([id, page]) => ({ id: Number(id), page }))
+  .sort((a, b) => a.page - b.page);
+
+const getSurahIdForPageNumber = (pageNumber: number) => {
+  if (!Number.isFinite(pageNumber) || pageNumber <= 0) return 1;
+
+  let match = 1;
+  for (const entry of SURAH_STARTS) {
+    if (entry.page <= pageNumber) {
+      match = entry.id;
+    } else {
+      break;
+    }
+  }
+
+  return match;
+};
 
 export default function Dashboard() {
   const router = useRouter();
+  const [isRedirecting, setIsRedirecting] = useState(true);
+
+  useEffect(() => {
+    let isActive = true;
+
+    const redirectToLastPage = async () => {
+      try {
+        const saved = await AsyncStorage.getItem(LAST_READ_PAGE_KEY);
+        const savedNumber = saved ? Number(saved) : NaN;
+        const pageNumber = Number.isFinite(savedNumber) ? savedNumber : 1;
+        const surahId = getSurahIdForPageNumber(pageNumber);
+
+        if (isActive) {
+          router.replace(`/(surahs)/${surahId}`);
+        }
+      } catch {
+        if (isActive) {
+          router.replace("/(surahs)/1");
+          setIsRedirecting(false);
+        }
+      }
+    };
+
+    redirectToLastPage();
+
+    return () => {
+      isActive = false;
+    };
+  }, [router]);
+
+  if (isRedirecting) {
+    return (
+      <View className="flex-1 bg-[#FFFDF5] items-center justify-center">
+        <ActivityIndicator size="small" color="#2E8B57" />
+      </View>
+    );
+  }
 
   const handleNavigation = (id: number) => {
     console.log("Navigating to Surah:", id);
@@ -70,18 +138,13 @@ export default function Dashboard() {
                     opacity: pressed ? 0.8 : 1,
                   },
                 ]}
-                className={`px-5 py-2 rounded-full ml-3 ${
-                  isActive ? "bg-[#2E8B57]" : "bg-[#F0EBE0]"
-                }`}
+                className="ml-3"
               >
-                <Text
-                  className={`text-base ${
-                    isActive ? "text-white font-bold" : "text-[#1F1F1F]"
-                  }`}
-                  style={{ fontFamily: "Amiri" }}
-                >
-                  {s.name}
-                </Text>
+                <SurahBanner
+                  label={s.name}
+                  size="md"
+                  textStyle={{ color: isActive ? "#2E8B57" : "#1F1F1F" }}
+                />
               </Pressable>
             );
           }}
@@ -108,12 +171,7 @@ export default function Dashboard() {
           className="w-[60%] aspect-[9/16] bg-white rounded-2xl shadow-sm border border-[#E8E1D1] p-4 justify-between"
         >
           <View className="flex-1 border-2 border-[#8F7E5E] p-2 items-center justify-between">
-            <Text
-              className="text-sm text-[#1F1F1F]"
-              style={{ fontFamily: "Amiri" }}
-            >
-              {ARABIC_SURAHS[1]}
-            </Text>
+            <SurahBanner label={ARABIC_SURAHS[1]} size="sm" />
 
             <View className="w-full items-center gap-2">
               <View className="h-[2px] w-[90%] bg-gray-200 rounded-full" />

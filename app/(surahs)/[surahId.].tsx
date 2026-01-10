@@ -4,16 +4,18 @@ import { Stack, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { View } from "react-native";
 
-import ready from "../../assets/data/quran-ready.json";
 import QuranPageView from "../../components/QuranPageView";
 import { LAST_READ_PAGE_KEY } from "../../constants/storage";
 import { ARABIC_SURAHS } from "../../constants/surahNames";
-import type { ReadyPage } from "../../utils/quranProcessor";
+import {
+  MUSHAF_PAGES,
+  MUSHAF_SURAH_START_PAGE,
+  type MushafPage,
+} from "../../utils/mushafData";
 
 // Load static data once
-const readyData = ready as any;
-const PAGES = readyData.pages as ReadyPage[];
-const SURAH_MAP = readyData.surahMap as Record<string, number>;
+const PAGES = MUSHAF_PAGES as MushafPage[];
+const SURAH_MAP = MUSHAF_SURAH_START_PAGE as Record<string, number>;
 const FALLBACK_PAGE_INDEX = Math.max(
   PAGES.findIndex((p) => p.pageNumber === 1),
   0
@@ -108,7 +110,7 @@ export default function SurahScreen() {
 
   // Use current page's surah name for the title (so it updates when we jump)
   const currentSurahName =
-    page?.verses?.[0]?.surah ?? surahNameFromRoute ?? "الفاتحة";
+    page?.surahs?.[0]?.titleAr ?? surahNameFromRoute ?? "الفاتحة";
 
   return (
     <View className="flex-1 bg-[#FFFDF5]">

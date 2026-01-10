@@ -20,6 +20,7 @@ module.exports = {
     extend: {
       fontFamily: {
         amiri: ["Amiri"],
+        uthmanic: ["UthmanicHafs"],
       },
     },
   },

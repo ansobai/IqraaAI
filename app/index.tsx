@@ -11,10 +11,10 @@ import {
   TextInput,
   View,
 } from "react-native";
-import ready from "../assets/data/quran-ready.json";
 import SurahBanner from "../components/SurahBanner";
 import { LAST_READ_PAGE_KEY } from "../constants/storage";
 import { ARABIC_SURAHS } from "../constants/surahNames";
+import { MUSHAF_SURAH_START_PAGE } from "../utils/mushafData";
 import { toArabicNumber } from "../utils/toArabicNumbers";
 
 interface SurahItem {
@@ -24,8 +24,7 @@ interface SurahItem {
 
 // Surahs shown in the slider
 const SURAHS = ARABIC_SURAHS.map((name, i) => ({ id: i, name }));
-const readyData = ready as any;
-const SURAH_MAP = readyData.surahMap as Record<string, number>;
+const SURAH_MAP = MUSHAF_SURAH_START_PAGE as Record<string, number>;
 const SURAH_STARTS = Object.entries(SURAH_MAP)
   .map(([id, page]) => ({ id: Number(id), page }))
   .sort((a, b) => a.page - b.page);

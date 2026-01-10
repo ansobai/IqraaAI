@@ -22,21 +22,21 @@ const SIZE_STYLES: Record<
 > = {
   sm: {
     fontSize: 16,
-    paddingVertical: 6,
+    paddingVertical: 4,
     paddingHorizontal: 18,
-    minHeight: 44,
+    minHeight: 36,
   },
   md: {
     fontSize: 18,
-    paddingVertical: 8,
+    paddingVertical: 6,
     paddingHorizontal: 22,
-    minHeight: 56,
+    minHeight: 46,
   },
   lg: {
     fontSize: 26,
-    paddingVertical: 6,
+    paddingVertical: 4,
     paddingHorizontal: 24,
-    minHeight: 80,
+    minHeight: 60,
   },
 };
 
@@ -57,6 +57,7 @@ interface Props {
   size?: BannerSize;
   containerStyle?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
+  lineHeight?: number;
 }
 
 export default function SurahBanner({
@@ -64,15 +65,26 @@ export default function SurahBanner({
   size = "md",
   containerStyle,
   textStyle,
+  lineHeight,
 }: Props) {
   const sizeStyle = SIZE_STYLES[size];
-  const lineHeight = Math.round(sizeStyle.fontSize * 1.4);
-  const bannerHeight = Math.max(
-    sizeStyle.minHeight,
-    lineHeight + sizeStyle.paddingVertical * 2
-  );
+  const usesLineHeight = Number.isFinite(lineHeight) && lineHeight! > 0;
+  const computedFontSize = usesLineHeight
+    ? Math.max(10, Math.round(lineHeight! * 0.5))
+    : sizeStyle.fontSize;
+  const computedLineHeight = usesLineHeight
+    ? Math.round(computedFontSize * 1.2)
+    : Math.round(sizeStyle.fontSize * 1.4);
+  const bannerHeight = usesLineHeight
+    ? Math.round(lineHeight!)
+    : Math.max(
+        sizeStyle.minHeight,
+        computedLineHeight + sizeStyle.paddingVertical * 2
+      );
   const isLarge = size === "lg";
   const bannerWidth = isLarge ? "100%" : undefined;
+  const paddingVertical = usesLineHeight ? 0 : sizeStyle.paddingVertical;
+  const paddingHorizontal = sizeStyle.paddingHorizontal;
 
   return (
     <View
@@ -98,18 +110,18 @@ export default function SurahBanner({
         style={[
           styles.textWrap,
           {
-            paddingVertical: sizeStyle.paddingVertical,
-            paddingHorizontal: sizeStyle.paddingHorizontal,
+            paddingVertical,
+            paddingHorizontal,
             ...(isLarge ? { width: "100%" } : null),
           },
         ]}
       >
         <Text
-          className="text-[#1F1F1F] font-amiri"
+          className="text-[#1F1F1F] font-uthmanic"
           style={[
             {
-              fontSize: sizeStyle.fontSize,
-              lineHeight,
+              fontSize: computedFontSize,
+              lineHeight: computedLineHeight,
               textAlign: "center",
               ...(isLarge ? { width: "100%" } : null),
               writingDirection: "rtl",

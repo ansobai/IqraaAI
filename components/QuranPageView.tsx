@@ -1,8 +1,12 @@
-import React, { useEffect, useRef, useState } from "react";
-import { Dimensions, Pressable, ScrollView, Text, View } from "react-native";
-import { ReadyPage } from "../utils/quranProcessor";
-
-import { useRouter } from "expo-router";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Dimensions,
+  LayoutChangeEvent,
+  Pressable,
+  ScrollView,
+  Text,
+  View,
+} from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   runOnJS,
@@ -11,35 +15,229 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { ARABIC_SURAHS } from "../constants/surahNames";
+import type { MushafPage } from "../utils/mushafData";
 import { toArabicNumber } from "../utils/toArabicNumbers";
 import SurahBanner from "./SurahBanner";
 
 const { width } = Dimensions.get("window");
 const AnimatedView = Animated.createAnimatedComponent(View);
-const ARABIC_SURAH_SET = new Set(ARABIC_SURAHS);
 
-const toArabicSurahName = (name: string) => {
-  const trimmed = name.trim();
-  if (ARABIC_SURAH_SET.has(trimmed)) return trimmed;
+const LINE_COUNT = 15;
+const CHAR_WIDTH_FACTOR = 0.5;
+const BISMILLAH = "بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ";
+const ARABIC_DIACRITICS = /[\u064B-\u065F\u0670\u06D6-\u06ED]/g;
+const ARABIC_LETTER = /[\u0621-\u064A]/;
 
-  const emDashIndex = trimmed.indexOf("\u2014");
-  if (emDashIndex >= 0) {
-    const afterDash = trimmed.slice(emDashIndex + 1).trim();
-    if (ARABIC_SURAH_SET.has(afterDash)) return afterDash;
+type LineToken = { kind: "word"; text: string } | { kind: "marker"; text: string };
+
+type PageSegment =
+  | { type: "text"; tokens: LineToken[]; length: number }
+  | { type: "banner"; label: string }
+  | { type: "basmalah" };
+
+type LineItem =
+  | { type: "text"; tokens: LineToken[]; isLast: boolean }
+  | { type: "banner"; label: string }
+  | { type: "basmalah" };
+
+const normalizeSpace = (text: string) => text.replace(/\s+/g, " ").trim();
+
+const stripDiacritics = (text: string) => text.replace(ARABIC_DIACRITICS, "");
+
+const tokenLength = (token: LineToken) => stripDiacritics(token.text).length;
+
+const insertTatweel = (text: string) => {
+  const chars = text.split("");
+  for (let i = 0; i < chars.length; i += 1) {
+    if (ARABIC_LETTER.test(chars[i])) {
+      chars.splice(i + 1, 0, "ـ");
+      return chars.join("");
+    }
   }
 
-  const arabicMatch = trimmed.match(
-    /[\u0600-\u06FF]+(?:\s+[\u0600-\u06FF]+)*/g
-  );
-  if (arabicMatch && arabicMatch.length > 0) {
-    return arabicMatch[arabicMatch.length - 1];
+  return text;
+};
+
+const applyTatweel = (
+  tokens: LineToken[],
+  targetLength: number,
+  shouldApply: boolean
+) => {
+  if (!shouldApply) return tokens;
+
+  const currentLength = tokens.reduce((sum, token) => sum + tokenLength(token), 0);
+  let remaining = targetLength - currentLength;
+  if (remaining <= 0) return tokens;
+
+  const indices = tokens
+    .map((token, index) =>
+      token.kind === "word" && ARABIC_LETTER.test(token.text) ? index : -1
+    )
+    .filter((index) => index >= 0);
+
+  if (indices.length === 0) return tokens;
+
+  const updated = tokens.map((token) => ({ ...token }));
+  let cursor = 0;
+  let safety = 0;
+
+  while (remaining > 0 && safety < indices.length * (remaining + 2)) {
+    const index = indices[cursor % indices.length];
+    const token = updated[index];
+    const nextText = insertTatweel(token.text);
+
+    if (nextText !== token.text) {
+      token.text = nextText;
+      remaining -= 1;
+    }
+
+    cursor += 1;
+    safety += 1;
   }
 
-  return trimmed;
+  return updated;
+};
+
+const buildTokensFromVerses = (
+  verses: Array<{ verseNumber: string; text: string }>
+) => {
+  const tokens: LineToken[] = [];
+
+  verses.forEach((verse) => {
+    const words = normalizeSpace(verse.text).split(" ").filter(Boolean);
+    words.forEach((word) => tokens.push({ kind: "word", text: word }));
+
+    const ayahNumber = Number(verse.verseNumber);
+    if (Number.isFinite(ayahNumber)) {
+      tokens.push({
+        kind: "marker",
+        text: `﴿${toArabicNumber(ayahNumber)}﴾`,
+      });
+    }
+  });
+
+  return tokens;
+};
+
+const splitTokensIntoLines = (tokens: LineToken[], linesCount: number) => {
+  if (linesCount <= 0 || tokens.length === 0) return [] as LineToken[][];
+
+  const totalLength = tokens.reduce((sum, token) => sum + tokenLength(token), 0);
+  const lines: LineToken[][] = [];
+  let consumedLength = 0;
+  let cursor = 0;
+
+  for (let lineIndex = 0; lineIndex < linesCount; lineIndex += 1) {
+    const remainingLines = linesCount - lineIndex;
+    const remainingLength = totalLength - consumedLength;
+    const targetLength = Math.ceil(remainingLength / remainingLines);
+    const lineTokens: LineToken[] = [];
+    let lineLength = 0;
+
+    while (cursor < tokens.length) {
+      const token = tokens[cursor];
+      const length = tokenLength(token);
+      const isMarker = token.kind === "marker";
+
+      if (
+        lineTokens.length > 0 &&
+        !isMarker &&
+        lineLength + length > targetLength &&
+        remainingLines > 1
+      ) {
+        break;
+      }
+
+      lineTokens.push(token);
+      lineLength += length;
+      consumedLength += length;
+      cursor += 1;
+    }
+
+    const finalized = applyTatweel(
+      lineTokens,
+      targetLength,
+      lineIndex < linesCount - 1
+    );
+    lines.push(finalized);
+  }
+
+  return lines;
+};
+
+const allocateLinesForSegments = (lengths: number[], totalLines: number) => {
+  if (totalLines <= 0 || lengths.length === 0) return [];
+
+  const minimums = lengths.map((len) => (len > 0 ? 1 : 0));
+  let remaining = totalLines - minimums.reduce((sum, value) => sum + value, 0);
+
+  if (remaining < 0) {
+    return lengths.map((_, index) => (index < totalLines ? 1 : 0));
+  }
+
+  const totalLength = lengths.reduce((sum, value) => sum + value, 0) || 1;
+  const rawShares = lengths.map((len) => (len / totalLength) * remaining);
+  const base = rawShares.map((value) => Math.floor(value));
+  const remainders = rawShares
+    .map((value, index) => ({ index, remainder: value - base[index] }))
+    .sort((a, b) => b.remainder - a.remainder);
+
+  let allocated = base.reduce((sum, value) => sum + value, 0);
+  let extra = remaining - allocated;
+
+  const lines = base.map((value, index) => value + minimums[index]);
+  let cursor = 0;
+
+  while (extra > 0 && remainders.length > 0) {
+    const target = remainders[cursor % remainders.length];
+    lines[target.index] += 1;
+    extra -= 1;
+    cursor += 1;
+  }
+
+  return lines;
+};
+
+const buildPageSegments = (page: MushafPage): PageSegment[] => {
+  const segments: PageSegment[] = [];
+
+  page.surahs.forEach((surah) => {
+    const verses = Array.isArray(surah.text) ? surah.text : [];
+    const startsHere = verses[0]?.verseNumber === "1";
+
+    if (startsHere) {
+      segments.push({ type: "banner", label: `سورة ${surah.titleAr}` });
+      if (surah.chapterNumber !== 9) {
+        segments.push({ type: "basmalah" });
+      }
+    }
+
+    let verseList = verses;
+    if (startsHere && verseList.length > 0) {
+      const firstText = normalizeSpace(verseList[0].text);
+      if (firstText === BISMILLAH) {
+        verseList = verseList.slice(1);
+      } else if (firstText.startsWith(BISMILLAH)) {
+        const trimmed = firstText.slice(BISMILLAH.length).trim();
+        verseList = [
+          { ...verseList[0], text: trimmed },
+          ...verseList.slice(1),
+        ].filter((verse) => normalizeSpace(verse.text).length > 0);
+      }
+    }
+
+    const tokens = buildTokensFromVerses(verseList);
+    const length = tokens.reduce((sum, token) => sum + tokenLength(token), 0);
+    if (tokens.length > 0) {
+      segments.push({ type: "text", tokens, length });
+    }
+  });
+
+  return segments;
 };
 
 interface Props {
-  page: ReadyPage;
+  page: MushafPage;
   onNextPage?: () => void;
   onPrevPage?: () => void;
   onJumpToSurah?: (surahId: number) => void;
@@ -51,28 +249,17 @@ export default function QuranPageView({
   onPrevPage,
   onJumpToSurah,
 }: Props) {
-  if (!page || !page.verses || page.verses.length === 0) return null;
+  if (!page || !page.surahs || page.surahs.length === 0) return null;
 
-  const firstVerse = page.verses[0];
-  const surahName = toArabicSurahName(firstVerse.surah);
-  const juzNumber = Math.ceil(page.pageNumber / 20);
+  const surahName = page.surahs[0]?.titleAr ?? "الفاتحة";
+  const juzNumber = page.juzNumber ?? Math.ceil(page.pageNumber / 20);
   const SURAHS = ARABIC_SURAHS.map((name, i) => ({ id: i, name })).filter(
     (s) => s.id > 0
   );
-  const router = useRouter();
-  const currentSurahId = ARABIC_SURAHS.findIndex((n) => n === surahName);
-  const currentSurahIndex = SURAHS.findIndex((s) => s.name === surahName);
-
-  const prevSurah =
-    currentSurahIndex > 0 ? SURAHS[currentSurahIndex - 1] : null;
-
-  const nextSurah =
-    currentSurahIndex >= 0 && currentSurahIndex < SURAHS.length - 1
-      ? SURAHS[currentSurahIndex + 1]
-      : null;
 
   // ------- MODE: full vs mini -------
   const [isMini, setIsMini] = useState(false);
+  const [contentSize, setContentSize] = useState({ width: 0, height: 0 });
 
   const baseScale = useSharedValue(1);
   const pinchScale = useSharedValue(1);
@@ -142,55 +329,150 @@ export default function QuranPageView({
     }
   };
 
-  const renderVerseBlocks = () => {
-    const blocks: React.ReactNode[] = [];
-    let inline: React.ReactNode[] = [];
+  const lineHeight = contentSize.height ? contentSize.height / LINE_COUNT : 0;
+  const baseFontSize = lineHeight ? lineHeight * 0.83 : 0;
 
-    const flushInline = (key: string) => {
-      if (inline.length === 0) return;
-      blocks.push(
-        <Text
-          key={key}
-          className="text-[24px] leading-[48px] text-justify text-[#1F1F1F] font-amiri"
-          style={{ writingDirection: "rtl" }}
-        >
-          {inline}
-        </Text>
-      );
-      inline = [];
-    };
+  const segments = useMemo(() => buildPageSegments(page), [page]);
 
-    page.verses.forEach((verse, index) => {
-      if (verse.isStart) {
-        flushInline(`block-${index}`);
+  const lines = useMemo(() => {
+    const specials = segments.filter((segment) => segment.type !== "text").length;
+    const totalTextLines = Math.max(LINE_COUNT - specials, 0);
+    const textSegments = segments.filter(
+      (segment): segment is Extract<PageSegment, { type: "text" }> =>
+        segment.type === "text"
+    );
+    const lengths = textSegments.map((segment) => segment.length);
+    const allocations = allocateLinesForSegments(lengths, totalTextLines);
 
-        blocks.push(
-          <View key={`surah-banner-${index}`} className="my-0 items-center">
-            <SurahBanner
-              label={`سورة ${toArabicSurahName(verse.surah)}`}
-              size="lg"
-              textStyle={{ color: "#000000" }}
-            />
-          </View>
-        );
+    const built: LineItem[] = [];
+    let textIndex = 0;
+
+    segments.forEach((segment) => {
+      if (segment.type === "text") {
+        const linesCount = allocations[textIndex] ?? 0;
+        const split = splitTokensIntoLines(segment.tokens, linesCount);
+        split.forEach((tokens, index) => {
+          built.push({
+            type: "text",
+            tokens,
+            isLast: index === split.length - 1,
+          });
+        });
+        textIndex += 1;
+      } else if (segment.type === "banner") {
+        built.push({ type: "banner", label: segment.label });
+      } else {
+        built.push({ type: "basmalah" });
       }
-
-      inline.push(
-        <React.Fragment key={`verse-${index}`}>
-          {verse.text}
-          <Text
-            className="text-[18px] text-[#BF8C34] font-amiri"
-          >
-            {" "}
-            ﴿{toArabicNumber(verse.ayah)}﴾{" "}
-          </Text>
-        </React.Fragment>
-      );
     });
 
-    flushInline("block-final");
+    while (built.length < LINE_COUNT) {
+      built.push({ type: "text", tokens: [], isLast: true });
+    }
 
-    return blocks;
+    return built.slice(0, LINE_COUNT);
+  }, [segments]);
+
+  const maxLineLength = useMemo(() => {
+    const lengths = lines
+      .filter((line) => line.type === "text")
+      .map((line) =>
+        line.tokens.reduce((sum, token) => sum + tokenLength(token), 0)
+      );
+    return Math.max(1, ...lengths);
+  }, [lines]);
+
+  const widthBasedFontSize =
+    contentSize.width && maxLineLength
+      ? contentSize.width / (maxLineLength * CHAR_WIDTH_FACTOR)
+      : baseFontSize;
+  const fontSize =
+    baseFontSize && widthBasedFontSize
+      ? Math.min(baseFontSize, widthBasedFontSize)
+      : baseFontSize;
+  const markerFontSize = fontSize ? Math.max(10, Math.round(fontSize * 0.75)) : 0;
+
+  const handleContentLayout = (event: LayoutChangeEvent) => {
+    const { width: layoutWidth, height: layoutHeight } = event.nativeEvent.layout;
+    if (
+      layoutWidth !== contentSize.width ||
+      layoutHeight !== contentSize.height
+    ) {
+      setContentSize({ width: layoutWidth, height: layoutHeight });
+    }
+  };
+
+  const renderLine = (line: LineItem, index: number) => {
+    const lineStyle = { height: lineHeight, justifyContent: "center" } as const;
+
+    if (line.type === "banner") {
+      return (
+        <View key={`line-banner-${index}`} style={lineStyle}>
+          <SurahBanner
+            label={line.label}
+            size="lg"
+            lineHeight={lineHeight}
+            textStyle={{ color: "#000000" }}
+          />
+        </View>
+      );
+    }
+
+    if (line.type === "basmalah") {
+      return (
+        <View key={`line-basmalah-${index}`} style={lineStyle}>
+          <Text
+            className="text-[#1F1F1F] font-uthmanic"
+            style={{
+              fontSize,
+              lineHeight,
+              textAlign: "center",
+              writingDirection: "rtl",
+            }}
+          >
+            {BISMILLAH}
+          </Text>
+        </View>
+      );
+    }
+
+    return (
+      <View key={`line-text-${index}`} style={lineStyle}>
+        <Text
+          className="text-[#1F1F1F] font-uthmanic"
+          style={{
+            fontSize,
+            lineHeight,
+            textAlign: "justify",
+            writingDirection: "rtl",
+          }}
+        >
+          {line.tokens.map((token, tokenIndex) => {
+            if (token.kind === "marker") {
+              return (
+                <Text
+                  key={`marker-${index}-${tokenIndex}`}
+                  className="text-[#BF8C34] font-uthmanic"
+                  style={{
+                    fontSize: markerFontSize,
+                    lineHeight,
+                  }}
+                >
+                  {" "}
+                  {token.text}{" "}
+                </Text>
+              );
+            }
+
+            return (
+              <Text key={`word-${index}-${tokenIndex}`}>
+                {token.text}{" "}
+              </Text>
+            );
+          })}
+        </Text>
+      </View>
+    );
   };
 
   return (
@@ -204,34 +486,32 @@ export default function QuranPageView({
               className="h-full justify-between pt-[60px] pb-[30px]"
             >
               {/* HEADER */}
-              <View className="flex-row justify-between px-5 mb-2 items-center">
+              <View className="flex-row justify-between px-4 mb-2 items-center">
                 <View className="px-3 py-1">
-                  <Text
-                    className="text-[18px] font-semibold text-[#1F1F1F] font-amiri"
-                  >
+                  <Text className="text-[18px] font-semibold text-[#1F1F1F] font-uthmanic">
                     سورة {surahName}
                   </Text>
                 </View>
                 <View className="px-3 py-1">
-                  <Text
-                    className="text-[18px] font-semibold text-[#1F1F1F] font-amiri"
-                  >
+                  <Text className="text-[18px] font-semibold text-[#1F1F1F] font-uthmanic">
                     الجزء {toArabicNumber(juzNumber)}
                   </Text>
                 </View>
               </View>
 
               {/* CONTENT */}
-              <View className="flex-1 px-6 justify-center">
-                {renderVerseBlocks()}
+              <View className="flex-1 items-center" onLayout={handleContentLayout}>
+                {lineHeight > 0 && fontSize > 0 && (
+                  <View className="flex-1 justify-start w-[88%]">
+                    {lines.map(renderLine)}
+                  </View>
+                )}
               </View>
 
               {/* FOOTER */}
               <View className="items-center mb-2">
                 <View className="w-10 h-10 items-center justify-center">
-                  <Text
-                    className="text-[16px] font-bold text-[#1F1F1F] font-amiri"
-                  >
+                  <Text className="text-[16px] font-bold text-[#1F1F1F] font-uthmanic">
                     {toArabicNumber(page.pageNumber)}
                   </Text>
                 </View>
@@ -241,7 +521,6 @@ export default function QuranPageView({
         </Pressable>
       </GestureDetector>
 
-      {/* MINI MODE CONTROLS – OUTSIDE THE SCALED VIEW */}
       {/* MINI MODE CONTROLS – OUTSIDE THE SCALED VIEW */}
       {isMini && (
         <>
@@ -253,9 +532,7 @@ export default function QuranPageView({
             {/* SEARCH BAR (UI only for now) */}
             <View className="w-[90%] mb-3">
               <View className="flex-row-reverse items-center bg-[#F4EFE4] rounded-3xl px-4 py-2">
-                <Text
-                  className="flex-1 text-right text-[#999] font-amiri"
-                >
+                <Text className="flex-1 text-right text-[#999] font-uthmanic">
                   ابحث في القرآن...
                 </Text>
               </View>
@@ -306,16 +583,12 @@ export default function QuranPageView({
                 onPress={onPrevPage}
                 className="px-3 py-1"
               >
-                <Text
-                  className="text-[16px] text-[#2E8B57] font-amiri"
-                >
+                <Text className="text-[16px] text-[#2E8B57] font-uthmanic">
                   السابق
                 </Text>
               </Pressable>
 
-              <Text
-                className="text-[16px] text-[#1F1F1F] font-amiri"
-              >
+              <Text className="text-[16px] text-[#1F1F1F] font-uthmanic">
                 صفحة {toArabicNumber(page.pageNumber)}
               </Text>
 
@@ -324,17 +597,13 @@ export default function QuranPageView({
                 onPress={onNextPage}
                 className="px-3 py-1"
               >
-                <Text
-                  className="text-[16px] text-[#2E8B57] font-amiri"
-                >
+                <Text className="text-[16px] text-[#2E8B57] font-uthmanic">
                   التالي
                 </Text>
               </Pressable>
             </View>
 
-            <Text
-              className="mt-2 text-[12px] text-[#666] font-amiri"
-            >
+            <Text className="mt-2 text-[12px] text-[#666] font-uthmanic">
               اضغط ضغطتين في أي مكان للتبديل بين وضع القراءة والوضع المصغّر
             </Text>
           </View>

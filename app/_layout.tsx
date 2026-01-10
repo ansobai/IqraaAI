@@ -10,6 +10,7 @@ SplashScreen.preventAutoHideAsync();
 export default function RootLayout() {
   const [loaded, error] = useFonts({
     Amiri: require("../assets/fonts/Amiri-Regular.ttf"),
+    UthmanicHafs: require("../assets/fonts/KFGQPC Uthmanic Script HAFS Regular.otf"),
   });
 
   useEffect(() => {

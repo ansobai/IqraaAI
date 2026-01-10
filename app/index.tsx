@@ -109,8 +109,7 @@ export default function Dashboard() {
           <TextInput
             placeholder="بحث في السور..."
             placeholderTextColor="#999"
-            className="flex-1 text-right text-base text-[#1F1F1F]"
-            style={{ fontFamily: "Amiri" }}
+            className="flex-1 text-right text-base text-[#1F1F1F] font-amiri"
           />
         </View>
       </View>
@@ -123,10 +122,7 @@ export default function Dashboard() {
           horizontal
           showsHorizontalScrollIndicator={false}
           inverted
-          contentContainerStyle={{
-            paddingHorizontal: 20,
-            alignItems: "center",
-          }}
+          contentContainerClassName="px-5 items-center"
           renderItem={({ item: s, index }) => {
             const isActive = index === 0;
             return (
@@ -154,8 +150,7 @@ export default function Dashboard() {
       {/* CENTER CARD */}
       <View className="flex-1 justify-center items-center">
         <Text
-          className="text-xl text-[#1F1F1F] mb-5 font-bold"
-          style={{ fontFamily: "Amiri" }}
+          className="text-xl text-[#1F1F1F] mb-5 font-bold font-amiri"
         >
           تابع القراءة
         </Text>
@@ -181,8 +176,7 @@ export default function Dashboard() {
             </View>
 
             <Text
-              className="text-xs text-[#8F7E5E]"
-              style={{ fontFamily: "Amiri" }}
+              className="text-xs text-[#8F7E5E] font-amiri"
             >
               {toArabicNumber(1)}
             </Text>
@@ -195,8 +189,7 @@ export default function Dashboard() {
         <View className="items-center gap-1">
           <Ionicons name="moon-outline" size={24} color="#1F1F1F" />
           <Text
-            className="text-xs text-[#1F1F1F]"
-            style={{ fontFamily: "Amiri" }}
+            className="text-xs text-[#1F1F1F] font-amiri"
           >
             المظهر
           </Text>
@@ -205,8 +198,7 @@ export default function Dashboard() {
         <View className="items-center gap-1">
           <Ionicons name="book-outline" size={24} color="#1F1F1F" />
           <Text
-            className="text-xs text-[#1F1F1F]"
-            style={{ fontFamily: "Amiri" }}
+            className="text-xs text-[#1F1F1F] font-amiri"
           >
             الجزء {toArabicNumber(1)}
           </Text>

@@ -1,23 +1,56 @@
 import React from "react";
 import {
-  ImageBackground,
+  Image,
   StyleProp,
+  StyleSheet,
   Text,
   TextStyle,
+  View,
   ViewStyle,
 } from "react-native";
-import { FONTS } from "../constants/theme";
 
 type BannerSize = "sm" | "md" | "lg";
 
 const SIZE_STYLES: Record<
   BannerSize,
-  { fontSize: number; paddingVertical: number; paddingHorizontal: number; minHeight: number }
+  {
+    fontSize: number;
+    paddingVertical: number;
+    paddingHorizontal: number;
+    minHeight: number;
+  }
 > = {
-  sm: { fontSize: 16, paddingVertical: 6, paddingHorizontal: 20, minHeight: 32 },
-  md: { fontSize: 18, paddingVertical: 8, paddingHorizontal: 24, minHeight: 38 },
-  lg: { fontSize: 22, paddingVertical: 10, paddingHorizontal: 28, minHeight: 46 },
+  sm: {
+    fontSize: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 18,
+    minHeight: 44,
+  },
+  md: {
+    fontSize: 18,
+    paddingVertical: 8,
+    paddingHorizontal: 22,
+    minHeight: 56,
+  },
+  lg: {
+    fontSize: 26,
+    paddingVertical: 6,
+    paddingHorizontal: 24,
+    minHeight: 80,
+  },
 };
+
+const styles = StyleSheet.create({
+  image: {
+    ...StyleSheet.absoluteFillObject,
+    width: "100%",
+    height: "100%",
+  },
+  textWrap: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+});
 
 interface Props {
   label: string;
@@ -33,36 +66,60 @@ export default function SurahBanner({
   textStyle,
 }: Props) {
   const sizeStyle = SIZE_STYLES[size];
+  const lineHeight = Math.round(sizeStyle.fontSize * 1.4);
+  const bannerHeight = Math.max(
+    sizeStyle.minHeight,
+    lineHeight + sizeStyle.paddingVertical * 2
+  );
+  const isLarge = size === "lg";
+  const bannerWidth = isLarge ? "100%" : undefined;
 
   return (
-    <ImageBackground
-      source={require("../assets/images/surah-banner.jpg")}
-      resizeMode="stretch"
+    <View
       style={[
         {
-          alignSelf: "center",
+          height: bannerHeight,
+          position: "relative",
           alignItems: "center",
           justifyContent: "center",
-          minHeight: sizeStyle.minHeight,
-          paddingVertical: sizeStyle.paddingVertical,
-          paddingHorizontal: sizeStyle.paddingHorizontal,
+          alignSelf: "center",
+          overflow: "hidden",
+          ...(bannerWidth ? { width: bannerWidth } : null),
         },
         containerStyle,
       ]}
     >
-      <Text
+      <Image
+        source={require("../assets/images/surah-banner.png")}
+        resizeMode="stretch"
+        style={styles.image}
+      />
+      <View
         style={[
+          styles.textWrap,
           {
-            fontFamily: FONTS.arabic,
-            fontSize: sizeStyle.fontSize,
-            color: "#1F1F1F",
-            textAlign: "center",
+            paddingVertical: sizeStyle.paddingVertical,
+            paddingHorizontal: sizeStyle.paddingHorizontal,
+            ...(isLarge ? { width: "100%" } : null),
           },
-          textStyle,
         ]}
       >
-        {label}
-      </Text>
-    </ImageBackground>
+        <Text
+          className="text-[#1F1F1F] font-amiri"
+          style={[
+            {
+              fontSize: sizeStyle.fontSize,
+              lineHeight,
+              textAlign: "center",
+              ...(isLarge ? { width: "100%" } : null),
+              writingDirection: "rtl",
+            },
+            textStyle,
+          ]}
+        >
+          {label}
+        </Text>
+      </View>
+    </View>
   );
 }

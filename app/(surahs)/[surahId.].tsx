@@ -111,11 +111,11 @@ export default function SurahScreen() {
     page?.verses?.[0]?.surah ?? surahNameFromRoute ?? "الفاتحة";
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#FFFDF5" }}>
+    <View className="flex-1 bg-[#FFFDF5]">
       <Stack.Screen options={{ headerShown: false }} />
 
       {/* Quran page view (handles gestures: pinch, swipe, double-tap) */}
-      <View style={{ flex: 1 }}>
+      <View className="flex-1">
         <QuranPageView
           page={page}
           onNextPage={handleNextPage}

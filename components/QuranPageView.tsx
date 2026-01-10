@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Dimensions, Pressable, ScrollView, Text, View } from "react-native";
-import { FONTS } from "../constants/theme";
 import { ReadyPage } from "../utils/quranProcessor";
 
 import { useRouter } from "expo-router";
@@ -152,8 +151,8 @@ export default function QuranPageView({
       blocks.push(
         <Text
           key={key}
-          className="text-[24px] leading-[48px] text-justify text-[#1F1F1F]"
-          style={{ fontFamily: FONTS.arabic, writingDirection: "rtl" }}
+          className="text-[24px] leading-[48px] text-justify text-[#1F1F1F] font-amiri"
+          style={{ writingDirection: "rtl" }}
         >
           {inline}
         </Text>
@@ -166,7 +165,7 @@ export default function QuranPageView({
         flushInline(`block-${index}`);
 
         blocks.push(
-          <View key={`surah-banner-${index}`} className="items-center my-2">
+          <View key={`surah-banner-${index}`} className="my-0 items-center">
             <SurahBanner
               label={`سورة ${toArabicSurahName(verse.surah)}`}
               size="lg"
@@ -180,8 +179,7 @@ export default function QuranPageView({
         <React.Fragment key={`verse-${index}`}>
           {verse.text}
           <Text
-            className="text-[18px] text-[#BF8C34]"
-            style={{ fontFamily: FONTS.arabic }}
+            className="text-[18px] text-[#BF8C34] font-amiri"
           >
             {" "}
             ﴿{toArabicNumber(verse.ayah)}﴾{" "}
@@ -202,26 +200,21 @@ export default function QuranPageView({
         <Pressable className="flex-1" onPress={handlePress}>
           <AnimatedView className="flex-1 items-center justify-center">
             <AnimatedView
-              style={[
-                { width, paddingTop: 60, paddingBottom: 30 },
-                animatedStyle,
-              ]}
-              className="h-full justify-between"
+              style={[{ width }, animatedStyle]}
+              className="h-full justify-between pt-[60px] pb-[30px]"
             >
               {/* HEADER */}
               <View className="flex-row justify-between px-5 mb-2 items-center">
                 <View className="px-3 py-1">
                   <Text
-                    className="text-[18px] font-semibold text-[#1F1F1F]"
-                    style={{ fontFamily: FONTS.arabic }}
+                    className="text-[18px] font-semibold text-[#1F1F1F] font-amiri"
                   >
                     سورة {surahName}
                   </Text>
                 </View>
                 <View className="px-3 py-1">
                   <Text
-                    className="text-[18px] font-semibold text-[#1F1F1F]"
-                    style={{ fontFamily: FONTS.arabic }}
+                    className="text-[18px] font-semibold text-[#1F1F1F] font-amiri"
                   >
                     الجزء {toArabicNumber(juzNumber)}
                   </Text>
@@ -237,8 +230,7 @@ export default function QuranPageView({
               <View className="items-center mb-2">
                 <View className="w-10 h-10 items-center justify-center">
                   <Text
-                    className="text-[16px] font-bold text-[#1F1F1F]"
-                    style={{ fontFamily: FONTS.arabic }}
+                    className="text-[16px] font-bold text-[#1F1F1F] font-amiri"
                   >
                     {toArabicNumber(page.pageNumber)}
                   </Text>
@@ -256,21 +248,13 @@ export default function QuranPageView({
           {/* TOP AREA: search + surah slider (stick to top) */}
           <View
             pointerEvents="box-none"
-            style={{
-              position: "absolute",
-              left: 0,
-              right: 0,
-              top: 40,
-              alignItems: "center",
-              zIndex: 50,
-            }}
+            className="absolute left-0 right-0 top-10 items-center z-50"
           >
             {/* SEARCH BAR (UI only for now) */}
             <View className="w-[90%] mb-3">
               <View className="flex-row-reverse items-center bg-[#F4EFE4] rounded-3xl px-4 py-2">
                 <Text
-                  className="flex-1 text-right text-[#999]"
-                  style={{ fontFamily: FONTS.arabic }}
+                  className="flex-1 text-right text-[#999] font-amiri"
                 >
                   ابحث في القرآن...
                 </Text>
@@ -281,11 +265,7 @@ export default function QuranPageView({
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{
-                flexDirection: "row-reverse",
-                alignItems: "center",
-                paddingHorizontal: 24,
-              }}
+              contentContainerClassName="flex-row-reverse items-center px-6"
             >
               {SURAHS.map((s) => {
                 const active = s.name === surahName;
@@ -318,53 +298,42 @@ export default function QuranPageView({
           {/* BOTTOM PAGE CONTROLS – stick to bottom */}
           <View
             pointerEvents="box-none"
-            style={{
-              position: "absolute",
-              left: 0,
-              right: 0,
-              bottom: 40,
-              alignItems: "center",
-              zIndex: 50,
-            }}
+            className="absolute left-0 right-0 bottom-10 items-center z-50"
           >
             <View className="flex-row items-center bg-white/95 rounded-full px-4 py-2 gap-4 shadow">
-              <Pressable
-                disabled={!onNextPage}
-                onPress={onNextPage}
-                className="px-3 py-1"
-              >
-                <Text
-                  className="text-[16px] text-[#2E8B57]"
-                  style={{ fontFamily: FONTS.arabic }}
-                >
-                  التالي
-                </Text>
-              </Pressable>
-
-              <Text
-                className="text-[16px] text-[#1F1F1F]"
-                style={{ fontFamily: FONTS.arabic }}
-              >
-                صفحة {toArabicNumber(page.pageNumber)}
-              </Text>
-
               <Pressable
                 disabled={!onPrevPage}
                 onPress={onPrevPage}
                 className="px-3 py-1"
               >
                 <Text
-                  className="text-[16px] text-[#2E8B57]"
-                  style={{ fontFamily: FONTS.arabic }}
+                  className="text-[16px] text-[#2E8B57] font-amiri"
                 >
                   السابق
+                </Text>
+              </Pressable>
+
+              <Text
+                className="text-[16px] text-[#1F1F1F] font-amiri"
+              >
+                صفحة {toArabicNumber(page.pageNumber)}
+              </Text>
+
+              <Pressable
+                disabled={!onNextPage}
+                onPress={onNextPage}
+                className="px-3 py-1"
+              >
+                <Text
+                  className="text-[16px] text-[#2E8B57] font-amiri"
+                >
+                  التالي
                 </Text>
               </Pressable>
             </View>
 
             <Text
-              className="mt-2 text-[12px] text-[#666]"
-              style={{ fontFamily: FONTS.arabic }}
+              className="mt-2 text-[12px] text-[#666] font-amiri"
             >
               اضغط ضغطتين في أي مكان للتبديل بين وضع القراءة والوضع المصغّر
             </Text>

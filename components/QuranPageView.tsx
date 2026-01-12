@@ -24,11 +24,14 @@ const AnimatedView = Animated.createAnimatedComponent(View);
 
 const LINE_COUNT = 15;
 const CHAR_WIDTH_FACTOR = 0.5;
+const ASPECT_RATIO = 1.45;
 const BISMILLAH = "بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ";
-const ARABIC_DIACRITICS = /[\u064B-\u065F\u0670\u06D6-\u06ED]/g;
+const ARABIC_DIACRITICS = /[\u064B-\u065F\u0670\u06D6-\u06ED\uFBBF]/g;
 const ARABIC_LETTER = /[\u0621-\u064A]/;
 
-type LineToken = { kind: "word"; text: string } | { kind: "marker"; text: string };
+type LineToken =
+  | { kind: "word"; text: string }
+  | { kind: "marker"; text: string };
 
 type PageSegment =
   | { type: "text"; tokens: LineToken[]; length: number }
@@ -65,7 +68,10 @@ const applyTatweel = (
 ) => {
   if (!shouldApply) return tokens;
 
-  const currentLength = tokens.reduce((sum, token) => sum + tokenLength(token), 0);
+  const currentLength = tokens.reduce(
+    (sum, token) => sum + tokenLength(token),
+    0
+  );
   let remaining = targetLength - currentLength;
   if (remaining <= 0) return tokens;
 
@@ -111,7 +117,7 @@ const buildTokensFromVerses = (
     if (Number.isFinite(ayahNumber)) {
       tokens.push({
         kind: "marker",
-        text: `﴿${toArabicNumber(ayahNumber)}﴾`,
+        text: toArabicNumber(ayahNumber),
       });
     }
   });
@@ -122,7 +128,10 @@ const buildTokensFromVerses = (
 const splitTokensIntoLines = (tokens: LineToken[], linesCount: number) => {
   if (linesCount <= 0 || tokens.length === 0) return [] as LineToken[][];
 
-  const totalLength = tokens.reduce((sum, token) => sum + tokenLength(token), 0);
+  const totalLength = tokens.reduce(
+    (sum, token) => sum + tokenLength(token),
+    0
+  );
   const lines: LineToken[][] = [];
   let consumedLength = 0;
   let cursor = 0;
@@ -168,8 +177,9 @@ const splitTokensIntoLines = (tokens: LineToken[], linesCount: number) => {
 const allocateLinesForSegments = (lengths: number[], totalLines: number) => {
   if (totalLines <= 0 || lengths.length === 0) return [];
 
-  const minimums = lengths.map((len) => (len > 0 ? 1 : 0));
-  let remaining = totalLines - minimums.reduce((sum, value) => sum + value, 0);
+  const minimums: number[] = lengths.map((len) => (len > 0 ? 1 : 0));
+  const remaining =
+    totalLines - minimums.reduce((sum, value) => sum + value, 0);
 
   if (remaining < 0) {
     return lengths.map((_, index) => (index < totalLines ? 1 : 0));
@@ -252,10 +262,7 @@ export default function QuranPageView({
   if (!page || !page.surahs || page.surahs.length === 0) return null;
 
   const surahName = page.surahs[0]?.titleAr ?? "الفاتحة";
-  const juzNumber = page.juzNumber ?? Math.ceil(page.pageNumber / 20);
-  const SURAHS = ARABIC_SURAHS.map((name, i) => ({ id: i, name })).filter(
-    (s) => s.id > 0
-  );
+  const SURAHS = ARABIC_SURAHS.map((name, i) => ({ id: i + 1, name }));
 
   // ------- MODE: full vs mini -------
   const [isMini, setIsMini] = useState(false);
@@ -292,7 +299,7 @@ export default function QuranPageView({
       // Condition that means: "User pinched out enough to want mini mode"
       if (pinchScale.value < 0.7) {
         pinchScale.value = 1; // reset zoom
-        runOnJS(setIsMini)(true); // 🔥 switch to mini mode
+        runOnJS(setIsMini)(true); // switch to mini mode
       }
       // Small pinch-out → snap back to full
       else if (pinchScale.value < 1) {
@@ -301,18 +308,20 @@ export default function QuranPageView({
     });
 
   // ------- PAN – swipe left/right to change page (full mode only) -------
-  const pan = Gesture.Pan().onEnd((event) => {
-    const dx = event.translationX;
+  const pan = Gesture.Pan()
+    .enabled(!isMini)
+    .onEnd((event) => {
+      const dx = event.translationX;
 
-    // 👉 swipe left → NEXT page
-    if (dx < -60 && onPrevPage) {
-      runOnJS(onPrevPage)();
-    }
-    // 👈 swipe right → PREVIOUS page
-    else if (dx > 60 && onNextPage) {
-      runOnJS(onNextPage)();
-    }
-  });
+      // 👉 swipe left → NEXT page
+      if (dx < -60 && onNextPage) {
+        runOnJS(onNextPage)();
+      }
+      // 👈 swipe right → PREVIOUS page
+      else if (dx > 60 && onPrevPage) {
+        runOnJS(onPrevPage)();
+      }
+    });
 
   const gesture = Gesture.Simultaneous(pinch, pan);
 
@@ -329,13 +338,20 @@ export default function QuranPageView({
     }
   };
 
-  const lineHeight = contentSize.height ? contentSize.height / LINE_COUNT : 0;
-  const baseFontSize = lineHeight ? lineHeight * 0.83 : 0;
+  const lineHeight = useMemo(() => {
+    if (!contentSize.height || !contentSize.width) return 0;
+    const maxHeight = contentSize.width * ASPECT_RATIO;
+    const effectiveHeight = Math.min(contentSize.height, maxHeight);
+    return effectiveHeight / LINE_COUNT;
+  }, [contentSize]);
+  const baseFontSize = lineHeight ? lineHeight * 0.95 : 0;
 
   const segments = useMemo(() => buildPageSegments(page), [page]);
 
   const lines = useMemo(() => {
-    const specials = segments.filter((segment) => segment.type !== "text").length;
+    const specials = segments.filter(
+      (segment) => segment.type !== "text"
+    ).length;
     const totalTextLines = Math.max(LINE_COUNT - specials, 0);
     const textSegments = segments.filter(
       (segment): segment is Extract<PageSegment, { type: "text" }> =>
@@ -375,7 +391,10 @@ export default function QuranPageView({
 
   const maxLineLength = useMemo(() => {
     const lengths = lines
-      .filter((line) => line.type === "text")
+      .filter(
+        (line): line is Extract<LineItem, { type: "text" }> =>
+          line.type === "text"
+      )
       .map((line) =>
         line.tokens.reduce((sum, token) => sum + tokenLength(token), 0)
       );
@@ -390,10 +409,13 @@ export default function QuranPageView({
     baseFontSize && widthBasedFontSize
       ? Math.min(baseFontSize, widthBasedFontSize)
       : baseFontSize;
-  const markerFontSize = fontSize ? Math.max(10, Math.round(fontSize * 0.75)) : 0;
+  const markerFontSize = fontSize
+    ? Math.max(10, Math.round(fontSize * 0.75))
+    : 0;
 
   const handleContentLayout = (event: LayoutChangeEvent) => {
-    const { width: layoutWidth, height: layoutHeight } = event.nativeEvent.layout;
+    const { width: layoutWidth, height: layoutHeight } =
+      event.nativeEvent.layout;
     if (
       layoutWidth !== contentSize.width ||
       layoutHeight !== contentSize.height
@@ -424,7 +446,7 @@ export default function QuranPageView({
           <Text
             className="text-[#1F1F1F] font-uthmanic"
             style={{
-              fontSize,
+              fontSize: fontSize * 0.75,
               lineHeight,
               textAlign: "center",
               writingDirection: "rtl",
@@ -443,7 +465,7 @@ export default function QuranPageView({
           style={{
             fontSize,
             lineHeight,
-            textAlign: "justify",
+            textAlign: "center",
             writingDirection: "rtl",
           }}
         >
@@ -465,9 +487,7 @@ export default function QuranPageView({
             }
 
             return (
-              <Text key={`word-${index}-${tokenIndex}`}>
-                {token.text}{" "}
-              </Text>
+              <Text key={`word-${index}-${tokenIndex}`}>{token.text} </Text>
             );
           })}
         </Text>
@@ -492,17 +512,26 @@ export default function QuranPageView({
                     سورة {surahName}
                   </Text>
                 </View>
-                <View className="px-3 py-1">
+                <View className="flex-row-reverse items-center gap-2 px-3 py-1">
                   <Text className="text-[18px] font-semibold text-[#1F1F1F] font-uthmanic">
-                    الجزء {toArabicNumber(juzNumber)}
+                    الجزء
+                  </Text>
+                  <Text className="text-[18px] text-[#1F1F1F] font-amiri">
+                    {toArabicNumber(page.pageNumber)}
                   </Text>
                 </View>
               </View>
 
               {/* CONTENT */}
-              <View className="flex-1 items-center" onLayout={handleContentLayout}>
+              <View
+                className="flex-1 items-center justify-start pt-4"
+                onLayout={handleContentLayout}
+              >
                 {lineHeight > 0 && fontSize > 0 && (
-                  <View className="flex-1 justify-start w-[88%]">
+                  <View
+                    className="justify-center w-[88%]"
+                    style={{ height: lineHeight * LINE_COUNT }}
+                  >
                     {lines.map(renderLine)}
                   </View>
                 )}
@@ -510,11 +539,9 @@ export default function QuranPageView({
 
               {/* FOOTER */}
               <View className="items-center mb-2">
-                <View className="w-10 h-10 items-center justify-center">
-                  <Text className="text-[16px] font-bold text-[#1F1F1F] font-uthmanic">
-                    {toArabicNumber(page.pageNumber)}
-                  </Text>
-                </View>
+                <Text className="text-[16px] font-bold text-[#1F1F1F] font-amiri">
+                  {toArabicNumber(page.pageNumber)}
+                </Text>
               </View>
             </AnimatedView>
           </AnimatedView>
@@ -542,7 +569,11 @@ export default function QuranPageView({
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
-              contentContainerClassName="flex-row-reverse items-center px-6"
+              contentContainerStyle={{
+                flexDirection: "row-reverse",
+                alignItems: "center",
+                paddingHorizontal: 24,
+              }}
             >
               {SURAHS.map((s) => {
                 const active = s.name === surahName;
@@ -576,37 +607,7 @@ export default function QuranPageView({
           <View
             pointerEvents="box-none"
             className="absolute left-0 right-0 bottom-10 items-center z-50"
-          >
-            <View className="flex-row items-center bg-white/95 rounded-full px-4 py-2 gap-4 shadow">
-              <Pressable
-                disabled={!onPrevPage}
-                onPress={onPrevPage}
-                className="px-3 py-1"
-              >
-                <Text className="text-[16px] text-[#2E8B57] font-uthmanic">
-                  السابق
-                </Text>
-              </Pressable>
-
-              <Text className="text-[16px] text-[#1F1F1F] font-uthmanic">
-                صفحة {toArabicNumber(page.pageNumber)}
-              </Text>
-
-              <Pressable
-                disabled={!onNextPage}
-                onPress={onNextPage}
-                className="px-3 py-1"
-              >
-                <Text className="text-[16px] text-[#2E8B57] font-uthmanic">
-                  التالي
-                </Text>
-              </Pressable>
-            </View>
-
-            <Text className="mt-2 text-[12px] text-[#666] font-uthmanic">
-              اضغط ضغطتين في أي مكان للتبديل بين وضع القراءة والوضع المصغّر
-            </Text>
-          </View>
+          />
         </>
       )}
     </View>

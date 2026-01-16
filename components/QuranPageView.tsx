@@ -23,18 +23,23 @@ const { width } = Dimensions.get("window");
 const AnimatedView = Animated.createAnimatedComponent(View);
 
 const LINE_COUNT = 15;
-const CHAR_WIDTH_FACTOR = 0.5;
-const ASPECT_RATIO = 1.45;
+const CHAR_WIDTH_FACTOR = 0.35;
+
+const ASPECT_RATIO = 1.55;
 const BISMILLAH = "بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ";
 const ARABIC_DIACRITICS = /[\u064B-\u065F\u0670\u06D6-\u06ED\uFBBF]/g;
 const ARABIC_LETTER = /[\u0621-\u064A]/;
+// Letters that do NOT connect to the following letter:
+// Hamza (sometimes), Alif variants, Dal, Dhal, Ra, Zain, Waw, Alif Maksura (sometimes), Ta Marbuta
+const NON_CONNECTING_AFTER =
+  /[\u0621\u0622\u0623\u0624\u0625\u0627\u0629\u062F\u0630\u0631\u0632\u0648\u0649\u0671]/;
 
 type LineToken =
   | { kind: "word"; text: string }
   | { kind: "marker"; text: string };
 
 type PageSegment =
-  | { type: "text"; tokens: LineToken[]; length: number }
+  | { type: "text"; tokens: LineToken[]; length: number; isSurahEnd: boolean }
   | { type: "banner"; label: string }
   | { type: "basmalah" };
 
@@ -51,10 +56,42 @@ const tokenLength = (token: LineToken) => stripDiacritics(token.text).length;
 
 const insertTatweel = (text: string) => {
   const chars = text.split("");
+
   for (let i = 0; i < chars.length; i += 1) {
-    if (ARABIC_LETTER.test(chars[i])) {
-      chars.splice(i + 1, 0, "ـ");
-      return chars.join("");
+    const char = chars[i];
+
+    // 1) Must be an Arabic letter
+    if (ARABIC_LETTER.test(char)) {
+      // 2) If it's a non-connecting letter (like Waw or Alif), we cannot insert a tatweel after it
+      if (NON_CONNECTING_AFTER.test(char)) {
+        continue;
+      }
+
+      // 3) Skip over any diacritics to find the actual insertion point
+      let insertIndex = i + 1;
+      while (
+        insertIndex < chars.length &&
+        ARABIC_DIACRITICS.test(chars[insertIndex])
+      ) {
+        insertIndex++;
+      }
+
+      // 4) Ensure there is another letter after this point (don't add trailing tatweel)
+      let hasNextLetter = false;
+      for (let j = insertIndex; j < chars.length; j++) {
+        // We only care if there is a base letter ahead, diacritics don't count as "next letter" connection target
+        // but practically if there is any Arabic content ahead, we want to connect.
+        // Let's be strict: search for next BASE letter.
+        if (ARABIC_LETTER.test(chars[j])) {
+          hasNextLetter = true;
+          break;
+        }
+      }
+
+      if (hasNextLetter) {
+        chars.splice(insertIndex, 0, "ـ");
+        return chars.join("");
+      }
     }
   }
 
@@ -110,7 +147,14 @@ const buildTokensFromVerses = (
   const tokens: LineToken[] = [];
 
   verses.forEach((verse) => {
-    const words = normalizeSpace(verse.text).split(" ").filter(Boolean);
+    // 1. Remove Rub El Hizb (Start symbol)
+    let text = verse.text.replace(/\u06DE/g, "");
+
+    // 2. Attach waqf marks to previous word (remove space before them)
+    // The marks are usually: ۖ (sala), ۗ (qala), ۚ (jeem), ۛ (three dots), ۙ (laa), ۘ (meem)
+    text = text.replace(/\s+([ۖۗۚۛۙۘ])/g, "$1");
+
+    const words = normalizeSpace(text).split(" ").filter(Boolean);
     words.forEach((word) => tokens.push({ kind: "word", text: word }));
 
     const ayahNumber = Number(verse.verseNumber);
@@ -125,7 +169,11 @@ const buildTokensFromVerses = (
   return tokens;
 };
 
-const splitTokensIntoLines = (tokens: LineToken[], linesCount: number) => {
+const splitTokensIntoLines = (
+  tokens: LineToken[],
+  linesCount: number,
+  justifyLastLine = false
+) => {
   if (linesCount <= 0 || tokens.length === 0) return [] as LineToken[][];
 
   const totalLength = tokens.reduce(
@@ -163,11 +211,10 @@ const splitTokensIntoLines = (tokens: LineToken[], linesCount: number) => {
       cursor += 1;
     }
 
-    const finalized = applyTatweel(
-      lineTokens,
-      targetLength,
-      lineIndex < linesCount - 1
-    );
+    const isLastLine = lineIndex === linesCount - 1;
+    const shouldApply = !isLastLine || justifyLastLine;
+
+    const finalized = applyTatweel(lineTokens, targetLength, shouldApply);
     lines.push(finalized);
   }
 
@@ -238,8 +285,13 @@ const buildPageSegments = (page: MushafPage): PageSegment[] => {
 
     const tokens = buildTokensFromVerses(verseList);
     const length = tokens.reduce((sum, token) => sum + tokenLength(token), 0);
+
+    // Check if this segment contains the actual end of the Surah
+    const lastVerse = verseList[verseList.length - 1];
+    const isSurahEnd = Number(lastVerse?.verseNumber) === surah.verseCount;
+
     if (tokens.length > 0) {
-      segments.push({ type: "text", tokens, length });
+      segments.push({ type: "text", tokens, length, isSurahEnd });
     }
   });
 
@@ -313,13 +365,13 @@ export default function QuranPageView({
     .onEnd((event) => {
       const dx = event.translationX;
 
-      // 👉 swipe left → NEXT page
-      if (dx < -60 && onNextPage) {
-        runOnJS(onNextPage)();
-      }
-      // 👈 swipe right → PREVIOUS page
-      else if (dx > 60 && onPrevPage) {
+      // 👉 swipe left → PREVIOUS page
+      if (dx < -60 && onPrevPage) {
         runOnJS(onPrevPage)();
+      }
+      // 👈 swipe right → NEXT page
+      else if (dx > 60 && onNextPage) {
+        runOnJS(onNextPage)();
       }
     });
 
@@ -344,7 +396,9 @@ export default function QuranPageView({
     const effectiveHeight = Math.min(contentSize.height, maxHeight);
     return effectiveHeight / LINE_COUNT;
   }, [contentSize]);
-  const baseFontSize = lineHeight ? lineHeight * 0.95 : 0;
+
+  // Increase multiplier to 2.5 to make text larger relative to line height
+  const baseFontSize = lineHeight ? lineHeight * 2.5 : 0;
 
   const segments = useMemo(() => buildPageSegments(page), [page]);
 
@@ -366,12 +420,23 @@ export default function QuranPageView({
     segments.forEach((segment) => {
       if (segment.type === "text") {
         const linesCount = allocations[textIndex] ?? 0;
-        const split = splitTokensIntoLines(segment.tokens, linesCount);
+
+        // Justify the last line of the segment ONLY if it is NOT the end of the Surah
+        const justifyLast = !segment.isSurahEnd;
+
+        const split = splitTokensIntoLines(
+          segment.tokens,
+          linesCount,
+          justifyLast
+        );
+
         split.forEach((tokens, index) => {
+          // It is only "ragged" (flex-start) if it is the last line AND the segment is the Surah end
+          const isRagged = index === split.length - 1 && segment.isSurahEnd;
           built.push({
             type: "text",
             tokens,
-            isLast: index === split.length - 1,
+            isLast: isRagged,
           });
         });
         textIndex += 1;
@@ -395,22 +460,35 @@ export default function QuranPageView({
         (line): line is Extract<LineItem, { type: "text" }> =>
           line.type === "text"
       )
-      .map((line) =>
-        line.tokens.reduce((sum, token) => sum + tokenLength(token), 0)
-      );
+      .map((line) => {
+        const textLen = line.tokens.reduce(
+          (sum, token) => sum + tokenLength(token),
+          0
+        );
+        // Add "virtual" length for spaces between words to ensure we leave room for gaps
+        const spaceCount = Math.max(0, line.tokens.length - 1);
+        // Balanced weight (0.60) - sufficient for gaps but not overly conservative
+        return textLen + spaceCount * 0.6;
+      });
     return Math.max(1, ...lengths);
   }, [lines]);
 
+  // Account for horizontal padding (16 on each side = 32, plus a safety buffer)
+  const availableWidth = contentSize.width ? contentSize.width - 34 : 0;
+
+  // Balanced char width factor (0.34)
   const widthBasedFontSize =
-    contentSize.width && maxLineLength
-      ? contentSize.width / (maxLineLength * CHAR_WIDTH_FACTOR)
+    availableWidth && maxLineLength
+      ? availableWidth / (maxLineLength * 0.34)
       : baseFontSize;
+
   const fontSize =
     baseFontSize && widthBasedFontSize
       ? Math.min(baseFontSize, widthBasedFontSize)
       : baseFontSize;
+
   const markerFontSize = fontSize
-    ? Math.max(10, Math.round(fontSize * 0.75))
+    ? Math.max(12, Math.round(fontSize * 0.92)) // Balanced marker size
     : 0;
 
   const handleContentLayout = (event: LayoutChangeEvent) => {
@@ -444,7 +522,7 @@ export default function QuranPageView({
       return (
         <View key={`line-basmalah-${index}`} style={lineStyle}>
           <Text
-            className="text-[#1F1F1F] font-uthmanic"
+            className="text-[#1F1F1F] font-madani"
             style={{
               fontSize: fontSize * 0.75,
               lineHeight,
@@ -458,52 +536,65 @@ export default function QuranPageView({
       );
     }
 
-    return (
-      <View key={`line-text-${index}`} style={lineStyle}>
-        <Text
-          className="text-[#1F1F1F] font-uthmanic"
-          style={{
-            fontSize,
-            lineHeight,
-            textAlign: "center",
-            writingDirection: "rtl",
-          }}
-        >
-          {line.tokens.map((token, tokenIndex) => {
-            if (token.kind === "marker") {
-              return (
-                <Text
-                  key={`marker-${index}-${tokenIndex}`}
-                  className="text-[#BF8C34] font-uthmanic"
-                  style={{
-                    fontSize: markerFontSize,
-                    lineHeight,
-                  }}
-                >
-                  {" "}
-                  {token.text}{" "}
-                </Text>
-              );
-            }
+    // Use Flexbox row-reverse for RTL with space-between for full justification
+    // Only last line of a surah segment should use flex-start (ragged)
+    const isRagged = line.isLast;
 
+    return (
+      <View
+        key={`line-text-${index}`}
+        style={[
+          lineStyle,
+          {
+            flexDirection: "row-reverse",
+            justifyContent: isRagged ? "flex-start" : "space-between",
+            alignItems: "center",
+            columnGap: isRagged ? 5 : 0, // Add explicit gap for ragged lines, justified lines manage space via space-between but we size for it now
+          },
+        ]}
+      >
+        {line.tokens.map((token, tokenIndex) => {
+          if (token.kind === "marker") {
             return (
-              <Text key={`word-${index}-${tokenIndex}`}>{token.text} </Text>
+              <Text
+                key={`marker-${index}-${tokenIndex}`}
+                className="text-[#BF8C34] font-uthmanic"
+                style={{
+                  fontSize: markerFontSize,
+                  lineHeight,
+                }}
+              >
+                {token.text}
+              </Text>
             );
-          })}
-        </Text>
+          }
+
+          return (
+            <Text
+              key={`word-${index}-${tokenIndex}`}
+              className="text-[#1F1F1F] font-scheherazade"
+              style={{
+                fontSize,
+                lineHeight,
+              }}
+            >
+              {token.text}
+            </Text>
+          );
+        })}
       </View>
     );
   };
 
   return (
-    <View className="flex-1 bg-[#FFFDF5]">
+    <View className="flex-1 bg-[#fff8e1]">
       {/* MAIN PAGE (scaled) */}
       <GestureDetector gesture={gesture}>
         <Pressable className="flex-1" onPress={handlePress}>
           <AnimatedView className="flex-1 items-center justify-center">
             <AnimatedView
               style={[{ width }, animatedStyle]}
-              className="h-full justify-between pt-[60px] pb-[30px]"
+              className="h-full justify-between pt-[60px] pb-[10px]"
             >
               {/* HEADER */}
               <View className="flex-row justify-between px-4 mb-2 items-center">
@@ -524,12 +615,13 @@ export default function QuranPageView({
 
               {/* CONTENT */}
               <View
-                className="flex-1 items-center justify-start pt-4"
+                className="flex-1 justify-start"
+                style={{ paddingHorizontal: 16 }}
                 onLayout={handleContentLayout}
               >
                 {lineHeight > 0 && fontSize > 0 && (
                   <View
-                    className="justify-center w-[88%]"
+                    className="justify-center w-full"
                     style={{ height: lineHeight * LINE_COUNT }}
                   >
                     {lines.map(renderLine)}

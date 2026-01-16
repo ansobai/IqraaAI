@@ -1,12 +1,12 @@
 import React from "react";
 import {
-  Image,
-  StyleProp,
-  StyleSheet,
-  Text,
-  TextStyle,
-  View,
-  ViewStyle,
+    Image,
+    StyleProp,
+    StyleSheet,
+    Text,
+    TextStyle,
+    View,
+    ViewStyle,
 } from "react-native";
 
 type BannerSize = "sm" | "md" | "lg";
@@ -70,10 +70,10 @@ export default function SurahBanner({
   const sizeStyle = SIZE_STYLES[size];
   const usesLineHeight = Number.isFinite(lineHeight) && lineHeight! > 0;
   const computedFontSize = usesLineHeight
-    ? Math.max(10, Math.round(lineHeight! * 0.5))
+    ? Math.max(10, Math.round(lineHeight! * 0.7))
     : sizeStyle.fontSize;
   const computedLineHeight = usesLineHeight
-    ? Math.round(computedFontSize * 1.2)
+    ? Math.round(computedFontSize * 1.3)
     : Math.round(sizeStyle.fontSize * 1.4);
   const bannerHeight = usesLineHeight
     ? Math.round(lineHeight!)

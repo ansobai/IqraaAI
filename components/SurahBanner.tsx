@@ -10,6 +10,7 @@ import {
 } from "react-native";
 
 type BannerSize = "sm" | "md" | "lg";
+export type BannerVariant = "default" | "left" | "right" | "page";
 
 const SIZE_STYLES: Record<
   BannerSize,
@@ -55,6 +56,7 @@ const styles = StyleSheet.create({
 interface Props {
   label: string;
   size?: BannerSize;
+  variant?: BannerVariant;
   containerStyle?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
   lineHeight?: number;
@@ -63,6 +65,7 @@ interface Props {
 export default function SurahBanner({
   label,
   size = "md",
+  variant = "default",
   containerStyle,
   textStyle,
   lineHeight,
@@ -86,6 +89,42 @@ export default function SurahBanner({
   const paddingVertical = usesLineHeight ? 0 : sizeStyle.paddingVertical;
   const paddingHorizontal = sizeStyle.paddingHorizontal;
 
+  // Variant logic
+  let imageSource;
+  let textWidthPercent = "100%";
+  let textAlign: "center" | "left" | "right" = "center";
+  
+  // Alignment adjustments based on the half-shape logic
+  // If it's the "left" piece (next surah), we might want the text aligned to the visible part.
+  // The user said "left is next", "right is previous".
+  // "left" image shows the left half of the shape. Usually that means the text should be on the left side?
+  // Or if it's cutting off the right side, the text should be left-aligned.
+  // Let's assume standard centering within the available "half" width for now, or align towards the center of the screen.
+  // Actually, if it's the "left" banner, it sits on the left of the screen. The right side is cut off.
+  // So text should be on the left side of the banner.
+  
+  switch (variant) {
+    case "left":
+      imageSource = require("../assets/images/surah_name_border_left_2.png");
+      textWidthPercent = "60%"; // Constrain width
+      textAlign = "left"; // Align to visible side
+      break;
+    case "right":
+      imageSource = require("../assets/images/surah_name_border_right_2.png");
+      textWidthPercent = "60%";
+      textAlign = "right";
+      break;
+    case "page":
+      imageSource = require("../assets/images/surah_banner.png");
+      // Page banner is wide, text centered
+      textWidthPercent = "100%";
+      textAlign = "center";
+      break;
+    default:
+      imageSource = require("../assets/images/surah_name-border.png");
+      break;
+  }
+
   return (
     <View
       style={[
@@ -102,7 +141,7 @@ export default function SurahBanner({
       ]}
     >
       <Image
-        source={require("../assets/images/surah-banner.png")}
+        source={imageSource}
         resizeMode="stretch"
         style={styles.image}
       />
@@ -112,18 +151,24 @@ export default function SurahBanner({
           {
             paddingVertical,
             paddingHorizontal,
+            width: "100%", // Wrapper takes full width to allow internal alignment
             ...(isLarge ? { width: "100%" } : null),
+            // For variants, we might need to shift the content area
+            alignItems: variant === "left" ? "flex-start" : variant === "right" ? "flex-end" : "center",
+            paddingLeft: variant === "left" ? paddingHorizontal : undefined,
+            paddingRight: variant === "right" ? paddingHorizontal : undefined,
           },
         ]}
       >
         <Text
           className="text-[#1F1F1F] font-uthmanic"
+          numberOfLines={1}
           style={[
             {
               fontSize: computedFontSize,
               lineHeight: computedLineHeight,
-              textAlign: "center",
-              ...(isLarge ? { width: "100%" } : null),
+              textAlign: "center", // Text itself is centered within its constrained width
+              width: variant === "default" ? (isLarge ? "100%" : undefined) : textWidthPercent,
               writingDirection: "rtl",
             },
             textStyle,

@@ -3,18 +3,20 @@ import {
   Dimensions,
   LayoutChangeEvent,
   Pressable,
-  ScrollView,
   Text,
   View,
 } from "react-native";
-import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import {
+  Gesture,
+  GestureDetector,
+} from "react-native-gesture-handler";
 import Animated, {
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
-import { ARABIC_SURAHS } from "../constants/surahNames";
+import { JUZ_NAMES } from "../constants/juzNames";
 import type { MushafPage } from "../utils/mushafData";
 import { toArabicNumber } from "../utils/toArabicNumbers";
 import SurahBanner from "./SurahBanner";
@@ -300,24 +302,20 @@ const buildPageSegments = (page: MushafPage): PageSegment[] => {
 
 interface Props {
   page: MushafPage;
-  onNextPage?: () => void;
-  onPrevPage?: () => void;
-  onJumpToSurah?: (surahId: number) => void;
+  isMini: boolean;
+  onToggleMiniMode: () => void;
 }
 
 export default function QuranPageView({
   page,
-  onNextPage,
-  onPrevPage,
-  onJumpToSurah,
+  isMini,
+  onToggleMiniMode,
 }: Props) {
   if (!page || !page.surahs || page.surahs.length === 0) return null;
 
   const surahName = page.surahs[0]?.titleAr ?? "الفاتحة";
-  const SURAHS = ARABIC_SURAHS.map((name, i) => ({ id: i + 1, name }));
 
   // ------- MODE: full vs mini -------
-  const [isMini, setIsMini] = useState(false);
   const [contentSize, setContentSize] = useState({ width: 0, height: 0 });
 
   const baseScale = useSharedValue(1);
@@ -351,7 +349,9 @@ export default function QuranPageView({
       // Condition that means: "User pinched out enough to want mini mode"
       if (pinchScale.value < 0.7) {
         pinchScale.value = 1; // reset zoom
-        runOnJS(setIsMini)(true); // switch to mini mode
+        if (!isMini) {
+          runOnJS(onToggleMiniMode)(); // switch to mini mode
+        }
       }
       // Small pinch-out → snap back to full
       else if (pinchScale.value < 1) {
@@ -359,23 +359,7 @@ export default function QuranPageView({
       }
     });
 
-  // ------- PAN – swipe left/right to change page (full mode only) -------
-  const pan = Gesture.Pan()
-    .enabled(!isMini)
-    .onEnd((event) => {
-      const dx = event.translationX;
-
-      // 👉 swipe left → PREVIOUS page
-      if (dx < -60 && onPrevPage) {
-        runOnJS(onPrevPage)();
-      }
-      // 👈 swipe right → NEXT page
-      else if (dx > 60 && onNextPage) {
-        runOnJS(onNextPage)();
-      }
-    });
-
-  const gesture = Gesture.Simultaneous(pinch, pan);
+  const gesture = pinch;
 
   // ------- DOUBLE TAP via Pressable -------
   const lastTapRef = useRef<number | null>(null);
@@ -384,7 +368,7 @@ export default function QuranPageView({
     const now = Date.now();
     if (lastTapRef.current && now - lastTapRef.current < 250) {
       lastTapRef.current = null;
-      setIsMini((prev) => !prev);
+      onToggleMiniMode();
     } else {
       lastTapRef.current = now;
     }
@@ -511,6 +495,7 @@ export default function QuranPageView({
           <SurahBanner
             label={line.label}
             size="lg"
+            variant="page"
             lineHeight={lineHeight}
             textStyle={{ color: "#000000" }}
           />
@@ -599,16 +584,13 @@ export default function QuranPageView({
               {/* HEADER */}
               <View className="flex-row justify-between px-4 mb-2 items-center">
                 <View className="px-3 py-1">
-                  <Text className="text-[18px] font-semibold text-[#1F1F1F] font-uthmanic">
+                  <Text className="text-[18px] font-bold text-[#1F1F1F] font-uthmanic">
                     سورة {surahName}
                   </Text>
                 </View>
-                <View className="flex-row-reverse items-center gap-2 px-3 py-1">
-                  <Text className="text-[18px] font-semibold text-[#1F1F1F] font-uthmanic">
-                    الجزء
-                  </Text>
-                  <Text className="text-[18px] text-[#1F1F1F] font-amiri">
-                    {toArabicNumber(page.pageNumber)}
+                <View className="flex-row-reverse items-center gap-1 px-3 py-1">
+                  <Text className="text-[18px] font-bold text-[#1F1F1F] font-uthmanic">
+                    الجزء {JUZ_NAMES[page.juzNumber ?? 1]}
                   </Text>
                 </View>
               </View>
@@ -640,68 +622,7 @@ export default function QuranPageView({
         </Pressable>
       </GestureDetector>
 
-      {/* MINI MODE CONTROLS – OUTSIDE THE SCALED VIEW */}
-      {isMini && (
-        <>
-          {/* TOP AREA: search + surah slider (stick to top) */}
-          <View
-            pointerEvents="box-none"
-            className="absolute left-0 right-0 top-10 items-center z-50"
-          >
-            {/* SEARCH BAR (UI only for now) */}
-            <View className="w-[90%] mb-3">
-              <View className="flex-row-reverse items-center bg-[#F4EFE4] rounded-3xl px-4 py-2">
-                <Text className="flex-1 text-right text-[#999] font-uthmanic">
-                  ابحث في القرآن...
-                </Text>
-              </View>
-            </View>
-
-            {/* SURAH SLIDER – all ١١٤ سور, horizontally scrollable */}
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{
-                flexDirection: "row-reverse",
-                alignItems: "center",
-                paddingHorizontal: 24,
-              }}
-            >
-              {SURAHS.map((s) => {
-                const active = s.name === surahName;
-                return (
-                  <Pressable
-                    key={s.id}
-                    onPress={() => onJumpToSurah && onJumpToSurah(s.id)}
-                    className="items-center mx-3"
-                  >
-                    <SurahBanner
-                      label={s.name}
-                      size="md"
-                      textStyle={{
-                        color: active ? "#C79A3A" : "#1F1F1F",
-                      }}
-                    />
-
-                    {/* underline / dot for active surah */}
-                    <View className="h-[3px] w-10 mt-1 rounded-full bg-transparent">
-                      {active && (
-                        <View className="h-[3px] w-full bg-[#C79A3A] rounded-full" />
-                      )}
-                    </View>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </View>
-
-          {/* BOTTOM PAGE CONTROLS – stick to bottom */}
-          <View
-            pointerEvents="box-none"
-            className="absolute left-0 right-0 bottom-10 items-center z-50"
-          />
-        </>
-      )}
+      {/* MINI MODE CONTROLS – Removed duplicate sliders here, moved to parent [surahId].tsx */}
     </View>
   );
 }

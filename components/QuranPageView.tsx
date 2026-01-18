@@ -9,6 +9,7 @@ import {
 import {
   Gesture,
   GestureDetector,
+  ScrollView,
 } from "react-native-gesture-handler";
 import Animated, {
   runOnJS,
@@ -17,6 +18,7 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { JUZ_NAMES } from "../constants/juzNames";
+import { ARABIC_SURAHS } from "../constants/surahNames";
 import type { MushafPage } from "../utils/mushafData";
 import { toArabicNumber } from "../utils/toArabicNumbers";
 import SurahBanner from "./SurahBanner";
@@ -24,9 +26,11 @@ import SurahBanner from "./SurahBanner";
 const { width } = Dimensions.get("window");
 const AnimatedView = Animated.createAnimatedComponent(View);
 
+const LINE_COUNT = 15;
+// KFGQPC Uthmanic Script is generally wider than standard fonts
+const CHAR_WIDTH_FACTOR = 0.33;
+
 const ASPECT_RATIO = 1.55;
-const MIN_CHARS_PER_LINE = 35;
-const MAX_FONT_SIZE = 42;
 const BISMILLAH = "بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ";
 const ARABIC_DIACRITICS = /[\u064B-\u065F\u0670\u06D6-\u06ED\uFBBF]/g;
 const ARABIC_LETTER = /[\u0621-\u064A]/;
@@ -301,23 +305,21 @@ const buildPageSegments = (page: MushafPage): PageSegment[] => {
 
 interface Props {
   page: MushafPage;
+  onJumpToSurah?: (surahId: number) => void;
   isMini: boolean;
   onToggleMiniMode: () => void;
 }
 
-const getLineCount = (pageNumber: number) => {
-  return pageNumber === 1 || pageNumber === 2 ? 7 : 15;
-};
-
 export default function QuranPageView({
   page,
+  onJumpToSurah,
   isMini,
   onToggleMiniMode,
 }: Props) {
   if (!page || !page.surahs || page.surahs.length === 0) return null;
 
-  const lineCount = getLineCount(page.pageNumber);
   const surahName = page.surahs[0]?.titleAr ?? "الفاتحة";
+  const SURAHS = ARABIC_SURAHS.map((name, i) => ({ id: i + 1, name }));
 
   // ------- MODE: full vs mini -------
   const [contentSize, setContentSize] = useState({ width: 0, height: 0 });
@@ -382,15 +384,7 @@ export default function QuranPageView({
     if (!contentSize.height || !contentSize.width) return 0;
     const maxHeight = contentSize.width * ASPECT_RATIO;
     const effectiveHeight = Math.min(contentSize.height, maxHeight);
-    return effectiveHeight / lineCount;
-  }, [contentSize, lineCount]);
-
-  const standardLineHeight = useMemo(() => {
-    if (!contentSize.height || !contentSize.width) return 0;
-    const maxHeight = contentSize.width * ASPECT_RATIO;
-    const effectiveHeight = Math.min(contentSize.height, maxHeight);
-    // Standard pages always have 15 lines
-    return effectiveHeight / 15;
+    return effectiveHeight / LINE_COUNT;
   }, [contentSize]);
 
   // Increase multiplier to 2.5 to make text larger relative to line height
@@ -402,7 +396,7 @@ export default function QuranPageView({
     const specials = segments.filter(
       (segment) => segment.type !== "text"
     ).length;
-    const totalTextLines = Math.max(lineCount - specials, 0);
+    const totalTextLines = Math.max(LINE_COUNT - specials, 0);
     const textSegments = segments.filter(
       (segment): segment is Extract<PageSegment, { type: "text" }> =>
         segment.type === "text"
@@ -443,12 +437,12 @@ export default function QuranPageView({
       }
     });
 
-    while (built.length < lineCount) {
+    while (built.length < LINE_COUNT) {
       built.push({ type: "text", tokens: [], isLast: true });
     }
 
-    return built.slice(0, lineCount);
-  }, [segments, lineCount]);
+    return built.slice(0, LINE_COUNT);
+  }, [segments]);
 
   const maxLineLength = useMemo(() => {
     const lengths = lines
@@ -464,30 +458,29 @@ export default function QuranPageView({
         // Add "virtual" length for spaces between words to ensure we leave room for gaps
         const spaceCount = Math.max(0, line.tokens.length - 1);
         // Balanced weight (0.60) - sufficient for gaps but not overly conservative
-        return textLen + spaceCount * 0.6;
+          return textLen + spaceCount * 0.1;
       });
-    const computedMax = Math.max(1, ...lengths);
-    // Enforce minimum line length to prevent font explosion on pages with short verses (e.g. Fatiha)
-    return Math.max(computedMax, MIN_CHARS_PER_LINE);
+    return Math.max(1, ...lengths);
   }, [lines]);
 
   // Account for horizontal padding (16 on each side = 32, plus a safety buffer)
   const availableWidth = contentSize.width ? contentSize.width - 34 : 0;
 
-  // Balanced char width factor (0.34)
+  // Use the constant factor defined at the top
   const widthBasedFontSize =
     availableWidth && maxLineLength
-      ? availableWidth / (maxLineLength * 0.34)
+      ? availableWidth / (maxLineLength * CHAR_WIDTH_FACTOR)
       : baseFontSize;
 
   const fontSize =
     baseFontSize && widthBasedFontSize
-      ? Math.min(baseFontSize, widthBasedFontSize, MAX_FONT_SIZE)
-      : Math.min(baseFontSize, MAX_FONT_SIZE);
+      ? Math.min(baseFontSize, widthBasedFontSize)
+      : baseFontSize;
 
   const markerFontSize = fontSize
-    ? Math.max(12, Math.round(fontSize * 0.92)) // Balanced marker size
+    ? Math.max(12, Math.round(fontSize * 0.98)) // 15% smaller than previous marker size
     : 0;
+  const markerTextColor = "#5B3A0D";
 
   const handleContentLayout = (event: LayoutChangeEvent) => {
     const { width: layoutWidth, height: layoutHeight } =
@@ -509,8 +502,7 @@ export default function QuranPageView({
           <SurahBanner
             label={line.label}
             size="lg"
-            variant="page"
-            lineHeight={standardLineHeight || lineHeight}
+            lineHeight={lineHeight}
             textStyle={{ color: "#000000" }}
           />
         </View>
@@ -557,8 +549,9 @@ export default function QuranPageView({
             return (
               <Text
                 key={`marker-${index}-${tokenIndex}`}
-                className="text-[#BF8C34] font-uthmanic"
+                className="font-madani"
                 style={{
+                  color: markerTextColor,
                   fontSize: markerFontSize,
                   lineHeight,
                 }}
@@ -571,7 +564,7 @@ export default function QuranPageView({
           return (
             <Text
               key={`word-${index}-${tokenIndex}`}
-              className="text-[#1F1F1F] font-scheherazade"
+              className="text-[#1F1F1F] font-madani"
               style={{
                 fontSize,
                 lineHeight,
@@ -598,12 +591,12 @@ export default function QuranPageView({
               {/* HEADER */}
               <View className="flex-row justify-between px-4 mb-2 items-center">
                 <View className="px-3 py-1">
-                  <Text className="text-[18px] font-bold text-[#1F1F1F] font-uthmanic">
+                  <Text className="text-[18px] font-bold text-[#1F1F1F] font-madani">
                     سورة {surahName}
                   </Text>
                 </View>
                 <View className="flex-row-reverse items-center gap-1 px-3 py-1">
-                  <Text className="text-[18px] font-bold text-[#1F1F1F] font-uthmanic">
+                  <Text className="text-[18px] font-bold text-[#1F1F1F] font-madani">
                     الجزء {JUZ_NAMES[page.juzNumber ?? 1]}
                   </Text>
                 </View>
@@ -618,7 +611,7 @@ export default function QuranPageView({
                 {lineHeight > 0 && fontSize > 0 && (
                   <View
                     className="justify-center w-full"
-                    style={{ height: lineHeight * lineCount }}
+                    style={{ height: lineHeight * LINE_COUNT }}
                   >
                     {lines.map(renderLine)}
                   </View>
@@ -627,7 +620,7 @@ export default function QuranPageView({
 
               {/* FOOTER */}
               <View className="items-center mb-2">
-                <Text className="text-[16px] font-bold text-[#1F1F1F] font-amiri">
+                <Text className="text-[16px] font-bold text-[#1F1F1F] font-madani">
                   {toArabicNumber(page.pageNumber)}
                 </Text>
               </View>
@@ -636,7 +629,68 @@ export default function QuranPageView({
         </Pressable>
       </GestureDetector>
 
-      {/* MINI MODE CONTROLS – Removed duplicate sliders here, moved to parent [surahId].tsx */}
+      {/* MINI MODE CONTROLS – OUTSIDE THE SCALED VIEW */}
+      {isMini && (
+        <>
+          {/* TOP AREA: search + surah slider (stick to top) */}
+          <View
+            pointerEvents="box-none"
+            className="absolute left-0 right-0 top-10 items-center z-50"
+          >
+            {/* SEARCH BAR (UI only for now) */}
+            <View className="w-[90%] mb-3">
+              <View className="flex-row-reverse items-center bg-[#F4EFE4] rounded-3xl px-4 py-2">
+                <Text className="flex-1 text-right text-[#999] font-madani">
+                  ابحث في القرآن...
+                </Text>
+              </View>
+            </View>
+
+            {/* SURAH SLIDER – all ١١٤ سور, horizontally scrollable */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{
+                flexDirection: "row-reverse",
+                alignItems: "center",
+                paddingHorizontal: 24,
+              }}
+            >
+              {SURAHS.map((s) => {
+                const active = s.name === surahName;
+                return (
+                  <Pressable
+                    key={s.id}
+                    onPress={() => onJumpToSurah && onJumpToSurah(s.id)}
+                    className="items-center mx-3"
+                  >
+                    <SurahBanner
+                      label={s.name}
+                      size="md"
+                      textStyle={{
+                        color: active ? "#C79A3A" : "#1F1F1F",
+                      }}
+                    />
+
+                    {/* underline / dot for active surah */}
+                    <View className="h-[3px] w-10 mt-1 rounded-full bg-transparent">
+                      {active && (
+                        <View className="h-[3px] w-full bg-[#C79A3A] rounded-full" />
+                      )}
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          {/* BOTTOM PAGE CONTROLS – stick to bottom */}
+          <View
+            pointerEvents="box-none"
+            className="absolute left-0 right-0 bottom-10 items-center z-50"
+          />
+        </>
+      )}
     </View>
   );
 }

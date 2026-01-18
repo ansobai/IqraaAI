@@ -25,6 +25,7 @@
       "output": "static",
       "favicon": "./assets/images/icon.jpg"
     },
+    "assetBundlePatterns": ["assets/data/mushaf-lines/**/*"],
     "plugins": [
       "expo-router",
       [

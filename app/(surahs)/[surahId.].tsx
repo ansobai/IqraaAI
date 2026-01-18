@@ -12,6 +12,7 @@ import { ARABIC_SURAHS } from "../../constants/surahNames";
 import {
   MUSHAF_PAGES,
   MUSHAF_SURAH_START_PAGE,
+  getSurahIdForPageNumber,
   type MushafPage,
 } from "../../utils/mushafData";
 
@@ -113,8 +114,9 @@ export default function SurahScreen() {
   }, [page?.pageNumber]);
 
   // Use current page's surah name for the title (so it updates when we jump)
+  const currentSurahId = getSurahIdForPageNumber(page?.pageNumber ?? 1);
   const currentSurahName =
-    page?.surahs?.[0]?.titleAr ?? surahNameFromRoute ?? "الفاتحة";
+    ARABIC_SURAHS[currentSurahId] ?? surahNameFromRoute ?? "الفاتحة";
 
   return (
     <View className="flex-1 bg-[#FFFDF5]">

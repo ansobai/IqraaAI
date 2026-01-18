@@ -9,9 +9,7 @@ SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
-    Amiri: require("../assets/fonts/Amiri-Regular.ttf"),
     UthmanicHafs: require("../assets/fonts/ArbFONTS-Hafs-Font-v0.09.otf"),
-    Scheherazade: require("../assets/fonts/ScheherazadeNew-Regular.ttf"),
     Madani: require("../assets/fonts/KFGQPC Uthmanic Script HAFS Regular.otf"),
   });
 

@@ -24,10 +24,9 @@ import SurahBanner from "./SurahBanner";
 const { width } = Dimensions.get("window");
 const AnimatedView = Animated.createAnimatedComponent(View);
 
-const LINE_COUNT = 15;
-const CHAR_WIDTH_FACTOR = 0.35;
-
 const ASPECT_RATIO = 1.55;
+const MIN_CHARS_PER_LINE = 35;
+const MAX_FONT_SIZE = 42;
 const BISMILLAH = "بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ";
 const ARABIC_DIACRITICS = /[\u064B-\u065F\u0670\u06D6-\u06ED\uFBBF]/g;
 const ARABIC_LETTER = /[\u0621-\u064A]/;
@@ -306,6 +305,10 @@ interface Props {
   onToggleMiniMode: () => void;
 }
 
+const getLineCount = (pageNumber: number) => {
+  return pageNumber === 1 || pageNumber === 2 ? 7 : 15;
+};
+
 export default function QuranPageView({
   page,
   isMini,
@@ -313,6 +316,7 @@ export default function QuranPageView({
 }: Props) {
   if (!page || !page.surahs || page.surahs.length === 0) return null;
 
+  const lineCount = getLineCount(page.pageNumber);
   const surahName = page.surahs[0]?.titleAr ?? "الفاتحة";
 
   // ------- MODE: full vs mini -------
@@ -378,7 +382,15 @@ export default function QuranPageView({
     if (!contentSize.height || !contentSize.width) return 0;
     const maxHeight = contentSize.width * ASPECT_RATIO;
     const effectiveHeight = Math.min(contentSize.height, maxHeight);
-    return effectiveHeight / LINE_COUNT;
+    return effectiveHeight / lineCount;
+  }, [contentSize, lineCount]);
+
+  const standardLineHeight = useMemo(() => {
+    if (!contentSize.height || !contentSize.width) return 0;
+    const maxHeight = contentSize.width * ASPECT_RATIO;
+    const effectiveHeight = Math.min(contentSize.height, maxHeight);
+    // Standard pages always have 15 lines
+    return effectiveHeight / 15;
   }, [contentSize]);
 
   // Increase multiplier to 2.5 to make text larger relative to line height
@@ -390,7 +402,7 @@ export default function QuranPageView({
     const specials = segments.filter(
       (segment) => segment.type !== "text"
     ).length;
-    const totalTextLines = Math.max(LINE_COUNT - specials, 0);
+    const totalTextLines = Math.max(lineCount - specials, 0);
     const textSegments = segments.filter(
       (segment): segment is Extract<PageSegment, { type: "text" }> =>
         segment.type === "text"
@@ -431,12 +443,12 @@ export default function QuranPageView({
       }
     });
 
-    while (built.length < LINE_COUNT) {
+    while (built.length < lineCount) {
       built.push({ type: "text", tokens: [], isLast: true });
     }
 
-    return built.slice(0, LINE_COUNT);
-  }, [segments]);
+    return built.slice(0, lineCount);
+  }, [segments, lineCount]);
 
   const maxLineLength = useMemo(() => {
     const lengths = lines
@@ -454,7 +466,9 @@ export default function QuranPageView({
         // Balanced weight (0.60) - sufficient for gaps but not overly conservative
         return textLen + spaceCount * 0.6;
       });
-    return Math.max(1, ...lengths);
+    const computedMax = Math.max(1, ...lengths);
+    // Enforce minimum line length to prevent font explosion on pages with short verses (e.g. Fatiha)
+    return Math.max(computedMax, MIN_CHARS_PER_LINE);
   }, [lines]);
 
   // Account for horizontal padding (16 on each side = 32, plus a safety buffer)
@@ -468,8 +482,8 @@ export default function QuranPageView({
 
   const fontSize =
     baseFontSize && widthBasedFontSize
-      ? Math.min(baseFontSize, widthBasedFontSize)
-      : baseFontSize;
+      ? Math.min(baseFontSize, widthBasedFontSize, MAX_FONT_SIZE)
+      : Math.min(baseFontSize, MAX_FONT_SIZE);
 
   const markerFontSize = fontSize
     ? Math.max(12, Math.round(fontSize * 0.92)) // Balanced marker size
@@ -496,7 +510,7 @@ export default function QuranPageView({
             label={line.label}
             size="lg"
             variant="page"
-            lineHeight={lineHeight}
+            lineHeight={standardLineHeight || lineHeight}
             textStyle={{ color: "#000000" }}
           />
         </View>
@@ -604,7 +618,7 @@ export default function QuranPageView({
                 {lineHeight > 0 && fontSize > 0 && (
                   <View
                     className="justify-center w-full"
-                    style={{ height: lineHeight * LINE_COUNT }}
+                    style={{ height: lineHeight * lineCount }}
                   >
                     {lines.map(renderLine)}
                   </View>

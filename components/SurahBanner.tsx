@@ -1,11 +1,12 @@
 import React from "react";
-import {
-  ImageBackground,
-  StyleProp,
-  Text,
-  TextStyle,
-  ViewStyle,
-} from "react-native";
+import
+  {
+    ImageBackground,
+    StyleProp,
+    Text,
+    TextStyle,
+    ViewStyle,
+  } from "react-native";
 import { FONTS } from "../constants/theme";
 
 type BannerSize = "sm" | "md" | "lg";
@@ -36,7 +37,7 @@ export default function SurahBanner({
 
   return (
     <ImageBackground
-      source={require("../assets/images/surah-banner.jpg")}
+      source={require("../assets/images/surah_banner.png")}
       resizeMode="stretch"
       style={[
         {

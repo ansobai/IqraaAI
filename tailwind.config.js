@@ -21,6 +21,8 @@ module.exports = {
       fontFamily: {
         uthmanic: ["UthmanicHafs"],
         madani: ["Madani"],
+        scheherazade: ["Scheherazade"],
+        amiri: ["Amiri"],
       },
     },
   },

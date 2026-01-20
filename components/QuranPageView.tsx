@@ -1,24 +1,19 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Dimensions,
-  LayoutChangeEvent,
-  Pressable,
-  Text,
-  View,
+    Dimensions,
+    LayoutChangeEvent,
+    Pressable,
+    Text,
+    View,
 } from "react-native";
-import {
-  Gesture,
-  GestureDetector,
-  ScrollView,
-} from "react-native-gesture-handler";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
-  runOnJS,
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
+    runOnJS,
+    useAnimatedStyle,
+    useSharedValue,
+    withTiming,
 } from "react-native-reanimated";
 import { JUZ_NAMES } from "../constants/juzNames";
-import { ARABIC_SURAHS } from "../constants/surahNames";
 import type { MushafPage } from "../utils/mushafData";
 import { toArabicNumber } from "../utils/toArabicNumbers";
 import SurahBanner from "./SurahBanner";
@@ -26,13 +21,19 @@ import SurahBanner from "./SurahBanner";
 const { width } = Dimensions.get("window");
 const AnimatedView = Animated.createAnimatedComponent(View);
 
-const LINE_COUNT = 15;
-// KFGQPC Uthmanic Script is generally wider than standard fonts
-const CHAR_WIDTH_FACTOR = 0.33;
+const DEFAULT_LINE_COUNT = 15;
+const PAGE_1_LINE_COUNT = 9;
+const PAGE_2_LINE_COUNT = 8;
+const CHAR_WIDTH_FACTOR = 0.35;
 
-const ASPECT_RATIO = 1.55;
+const TEXT_BLOCK_RATIO = 1.55; // Height / Width of the text area
+const TEXT_BLOCK_PADDING_HORIZONTAL = 20; // Padding inside the text block
+const TEXT_BLOCK_PADDING_VERTICAL = 10;   // Padding inside the text block
+
 const BISMILLAH = "بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ";
 const ARABIC_DIACRITICS = /[\u064B-\u065F\u0670\u06D6-\u06ED\uFBBF]/g;
+// Marks that can render as stray circles in some fonts (strip them for clean ayah markers).
+const STRAY_CIRCLE_MARKS = /[\u06DF\u06E2]/g;
 const ARABIC_LETTER = /[\u0621-\u064A]/;
 // Letters that do NOT connect to the following letter:
 // Hamza (sometimes), Alif variants, Dal, Dhal, Ra, Zain, Waw, Alif Maksura (sometimes), Ta Marbuta
@@ -152,8 +153,9 @@ const buildTokensFromVerses = (
   const tokens: LineToken[] = [];
 
   verses.forEach((verse) => {
-    // 1. Remove Rub El Hizb (Start symbol)
-    let text = verse.text.replace(/\u06DE/g, "");
+    // 1. Remove Rub El Hizb (Start symbol) and End of Ayah marker with its number (we add our own)
+    // Remove any End of Ayah marker (U+06DD) with or without Arabic-Indic digits
+    let text = verse.text.replace(/\u06DE/g, "").replace(/\u06DD[\u0660-\u0669]*/g, "").replace(/\u06DD/g, "").replace(STRAY_CIRCLE_MARKS, "").replace(/\uFBBF/g, "");
 
     // 2. Attach waqf marks to previous word (remove space before them)
     // The marks are usually: ۖ (sala), ۗ (qala), ۚ (jeem), ۛ (three dots), ۙ (laa), ۘ (meem)
@@ -305,24 +307,24 @@ const buildPageSegments = (page: MushafPage): PageSegment[] => {
 
 interface Props {
   page: MushafPage;
-  onJumpToSurah?: (surahId: number) => void;
   isMini: boolean;
   onToggleMiniMode: () => void;
 }
 
 export default function QuranPageView({
   page,
-  onJumpToSurah,
   isMini,
   onToggleMiniMode,
 }: Props) {
   if (!page || !page.surahs || page.surahs.length === 0) return null;
 
   const surahName = page.surahs[0]?.titleAr ?? "الفاتحة";
-  const SURAHS = ARABIC_SURAHS.map((name, i) => ({ id: i + 1, name }));
 
   // ------- MODE: full vs mini -------
   const [contentSize, setContentSize] = useState({ width: 0, height: 0 });
+  const [lineScaleByIndex, setLineScaleByIndex] = useState<
+    Record<number, number>
+  >({});
 
   const baseScale = useSharedValue(1);
   const pinchScale = useSharedValue(1);
@@ -370,6 +372,12 @@ export default function QuranPageView({
   // ------- DOUBLE TAP via Pressable -------
   const lastTapRef = useRef<number | null>(null);
 
+  const pageLineCount = useMemo(() => {
+    if (page.pageNumber === 1) return PAGE_1_LINE_COUNT;
+    if (page.pageNumber === 2) return PAGE_2_LINE_COUNT;
+    return DEFAULT_LINE_COUNT;
+  }, [page.pageNumber]);
+
   const handlePress = () => {
     const now = Date.now();
     if (lastTapRef.current && now - lastTapRef.current < 250) {
@@ -380,12 +388,40 @@ export default function QuranPageView({
     }
   };
 
-  const lineHeight = useMemo(() => {
-    if (!contentSize.height || !contentSize.width) return 0;
-    const maxHeight = contentSize.width * ASPECT_RATIO;
-    const effectiveHeight = Math.min(contentSize.height, maxHeight);
-    return effectiveHeight / LINE_COUNT;
+  const textBlockDimensions = useMemo(() => {
+    if (!contentSize.width || !contentSize.height) return { width: 0, height: 0 };
+
+    const maxWidth = contentSize.width;
+    const maxHeight = contentSize.height;
+
+    // Try to fit by width first
+    let width = maxWidth;
+    let height = width * TEXT_BLOCK_RATIO;
+
+    // If height exceeds available height, scale down by height
+    if (height > maxHeight) {
+      height = maxHeight;
+      width = height / TEXT_BLOCK_RATIO;
+    }
+
+    return { width, height };
   }, [contentSize]);
+
+  // Derived content dimensions (inside the padding)
+  const contentDimensions = useMemo(() => {
+    const { width, height } = textBlockDimensions;
+    if (!width || !height) return { width: 0, height: 0 };
+
+    return {
+      width: Math.max(0, width - (TEXT_BLOCK_PADDING_HORIZONTAL * 2)),
+      height: Math.max(0, height - (TEXT_BLOCK_PADDING_VERTICAL * 2)),
+    };
+  }, [textBlockDimensions]);
+
+  const lineHeight = useMemo(() => {
+    if (!contentDimensions.height) return 0;
+    return contentDimensions.height / pageLineCount;
+  }, [contentDimensions.height, pageLineCount]);
 
   // Increase multiplier to 2.5 to make text larger relative to line height
   const baseFontSize = lineHeight ? lineHeight * 2.5 : 0;
@@ -396,7 +432,7 @@ export default function QuranPageView({
     const specials = segments.filter(
       (segment) => segment.type !== "text"
     ).length;
-    const totalTextLines = Math.max(LINE_COUNT - specials, 0);
+    const totalTextLines = Math.max(pageLineCount - specials, 0);
     const textSegments = segments.filter(
       (segment): segment is Extract<PageSegment, { type: "text" }> =>
         segment.type === "text"
@@ -437,12 +473,12 @@ export default function QuranPageView({
       }
     });
 
-    while (built.length < LINE_COUNT) {
+    while (built.length < pageLineCount) {
       built.push({ type: "text", tokens: [], isLast: true });
     }
 
-    return built.slice(0, LINE_COUNT);
-  }, [segments]);
+    return built.slice(0, pageLineCount);
+  }, [segments, pageLineCount]);
 
   const maxLineLength = useMemo(() => {
     const lengths = lines
@@ -458,29 +494,50 @@ export default function QuranPageView({
         // Add "virtual" length for spaces between words to ensure we leave room for gaps
         const spaceCount = Math.max(0, line.tokens.length - 1);
         // Balanced weight (0.60) - sufficient for gaps but not overly conservative
-          return textLen + spaceCount * 0.1;
+          return textLen + spaceCount * 0.60;
       });
     return Math.max(1, ...lengths);
   }, [lines]);
 
-  // Account for horizontal padding (16 on each side = 32, plus a safety buffer)
-  const availableWidth = contentSize.width ? contentSize.width - 34 : 0;
+  const maxTextWidth = contentDimensions.width;
 
   // Use the constant factor defined at the top
   const widthBasedFontSize =
-    availableWidth && maxLineLength
-      ? availableWidth / (maxLineLength * CHAR_WIDTH_FACTOR)
+    maxTextWidth && maxLineLength
+      ? maxTextWidth / (maxLineLength * CHAR_WIDTH_FACTOR)
       : baseFontSize;
 
   const fontSize =
     baseFontSize && widthBasedFontSize
-      ? Math.min(baseFontSize, widthBasedFontSize)
+      ? Math.min(baseFontSize, widthBasedFontSize) * 0.95 // Add 5% safety buffer
       : baseFontSize;
+
+  useEffect(() => {
+    setLineScaleByIndex({});
+  }, [fontSize, maxTextWidth, lines.length]);
 
   const markerFontSize = fontSize
     ? Math.max(12, Math.round(fontSize * 0.98)) // 15% smaller than previous marker size
     : 0;
   const markerTextColor = "#5B3A0D";
+
+  const handleLineLayout = useCallback(
+    (index: number, measuredWidth: number) => {
+      if (!maxTextWidth || !measuredWidth) return;
+
+      const nextScale =
+        measuredWidth > maxTextWidth
+          ? Math.min(1, (maxTextWidth / measuredWidth) * 0.98)
+          : 1;
+
+      setLineScaleByIndex((prev) => {
+        const current = prev[index] ?? 1;
+        if (Math.abs(current - nextScale) < 0.005) return prev;
+        return { ...prev, [index]: nextScale };
+      });
+    },
+    [maxTextWidth]
+  );
 
   const handleContentLayout = (event: LayoutChangeEvent) => {
     const { width: layoutWidth, height: layoutHeight } =
@@ -493,8 +550,50 @@ export default function QuranPageView({
     }
   };
 
+  const renderLineTokens = (
+    tokens: LineToken[],
+    tokenFontSize: number,
+    tokenMarkerSize: number,
+    keyPrefix: string
+  ) =>
+    tokens.map((token, tokenIndex) => {
+      if (token.kind === "marker") {
+        return (
+          <Text
+            key={`${keyPrefix}-marker-${tokenIndex}`}
+            style={{
+              fontFamily: "Madani",
+              color: markerTextColor,
+              fontSize: tokenMarkerSize,
+              lineHeight,
+            }}
+          >
+            {token.text}
+          </Text>
+        );
+      }
+
+      return (
+        <Text
+          key={`${keyPrefix}-word-${tokenIndex}`}
+          className="text-[#1F1F1F] font-scheherazade"
+          style={{
+            fontFamily: "Scheherazade",
+            fontSize: tokenFontSize,
+            lineHeight,
+          }}
+        >
+          {token.text}
+        </Text>
+      );
+    });
+
   const renderLine = (line: LineItem, index: number) => {
-    const lineStyle = { height: lineHeight, justifyContent: "center" } as const;
+    const lineStyle = {
+      height: lineHeight,
+      justifyContent: "center",
+      width: "100%",
+    } as const;
 
     if (line.type === "banner") {
       return (
@@ -502,6 +601,7 @@ export default function QuranPageView({
           <SurahBanner
             label={line.label}
             size="lg"
+            variant="page"
             lineHeight={lineHeight}
             textStyle={{ color: "#000000" }}
           />
@@ -513,8 +613,9 @@ export default function QuranPageView({
       return (
         <View key={`line-basmalah-${index}`} style={lineStyle}>
           <Text
-            className="text-[#1F1F1F] font-madani"
+            className="text-[#1F1F1F] font-scheherazade"
             style={{
+              fontFamily: "Scheherazade",
               fontSize: fontSize * 0.75,
               lineHeight,
               textAlign: "center",
@@ -531,49 +632,50 @@ export default function QuranPageView({
     // Only last line of a surah segment should use flex-start (ragged)
     const isRagged = line.isLast;
 
+    const lineScale = lineScaleByIndex[index] ?? 1;
+    const lineFontSize = fontSize * lineScale;
+    const lineMarkerFontSize = markerFontSize * lineScale;
+
     return (
-      <View
-        key={`line-text-${index}`}
-        style={[
-          lineStyle,
-          {
+      <View key={`line-text-${index}`} style={lineStyle}>
+        <View
+          onLayout={(event) =>
+            handleLineLayout(index, event.nativeEvent.layout.width)
+          }
+          style={{
+            position: "absolute",
+            opacity: 0,
+            pointerEvents: "none",
+            alignSelf: "flex-start",
+            flexDirection: "row-reverse",
+            justifyContent: "flex-start",
+            alignItems: "center",
+            columnGap: isRagged ? 5 : 0,
+          }}
+        >
+          {renderLineTokens(
+            line.tokens,
+            fontSize,
+            markerFontSize,
+            `measure-${index}`
+          )}
+        </View>
+        <View
+          style={{
             flexDirection: "row-reverse",
             justifyContent: isRagged ? "flex-start" : "space-between",
             alignItems: "center",
             columnGap: isRagged ? 5 : 0, // Add explicit gap for ragged lines, justified lines manage space via space-between but we size for it now
-          },
-        ]}
-      >
-        {line.tokens.map((token, tokenIndex) => {
-          if (token.kind === "marker") {
-            return (
-              <Text
-                key={`marker-${index}-${tokenIndex}`}
-                className="font-madani"
-                style={{
-                  color: markerTextColor,
-                  fontSize: markerFontSize,
-                  lineHeight,
-                }}
-              >
-                {token.text}
-              </Text>
-            );
-          }
-
-          return (
-            <Text
-              key={`word-${index}-${tokenIndex}`}
-              className="text-[#1F1F1F] font-madani"
-              style={{
-                fontSize,
-                lineHeight,
-              }}
-            >
-              {token.text}
-            </Text>
-          );
-        })}
+            width: "100%",
+          }}
+        >
+          {renderLineTokens(
+            line.tokens,
+            lineFontSize,
+            lineMarkerFontSize,
+            `line-${index}`
+          )}
+        </View>
       </View>
     );
   };
@@ -591,12 +693,12 @@ export default function QuranPageView({
               {/* HEADER */}
               <View className="flex-row justify-between px-4 mb-2 items-center">
                 <View className="px-3 py-1">
-                  <Text className="text-[18px] font-bold text-[#1F1F1F] font-madani">
+                  <Text className="text-[18px] font-bold text-[#1F1F1F] font-scheherazade" style={{ fontFamily: "Scheherazade" }}>
                     سورة {surahName}
                   </Text>
                 </View>
                 <View className="flex-row-reverse items-center gap-1 px-3 py-1">
-                  <Text className="text-[18px] font-bold text-[#1F1F1F] font-madani">
+                  <Text className="text-[18px] font-bold text-[#1F1F1F] font-scheherazade" style={{ fontFamily: "Scheherazade" }}>
                     الجزء {JUZ_NAMES[page.juzNumber ?? 1]}
                   </Text>
                 </View>
@@ -604,14 +706,17 @@ export default function QuranPageView({
 
               {/* CONTENT */}
               <View
-                className="flex-1 justify-start"
-                style={{ paddingHorizontal: 16 }}
+                className="flex-1 items-center justify-center"
                 onLayout={handleContentLayout}
               >
-                {lineHeight > 0 && fontSize > 0 && (
+                {lineHeight > 0 && fontSize > 0 && textBlockDimensions.width > 0 && (
                   <View
-                    className="justify-center w-full"
-                    style={{ height: lineHeight * LINE_COUNT }}
+                    style={{
+                      width: textBlockDimensions.width,
+                      height: textBlockDimensions.height,
+                      paddingHorizontal: TEXT_BLOCK_PADDING_HORIZONTAL,
+                      paddingVertical: TEXT_BLOCK_PADDING_VERTICAL,
+                    }}
                   >
                     {lines.map(renderLine)}
                   </View>
@@ -620,7 +725,7 @@ export default function QuranPageView({
 
               {/* FOOTER */}
               <View className="items-center mb-2">
-                <Text className="text-[16px] font-bold text-[#1F1F1F] font-madani">
+                <Text className="text-[16px] font-bold text-[#1F1F1F] font-scheherazade" style={{ fontFamily: "Scheherazade" }}>
                   {toArabicNumber(page.pageNumber)}
                 </Text>
               </View>
@@ -628,69 +733,6 @@ export default function QuranPageView({
           </AnimatedView>
         </Pressable>
       </GestureDetector>
-
-      {/* MINI MODE CONTROLS – OUTSIDE THE SCALED VIEW */}
-      {isMini && (
-        <>
-          {/* TOP AREA: search + surah slider (stick to top) */}
-          <View
-            pointerEvents="box-none"
-            className="absolute left-0 right-0 top-10 items-center z-50"
-          >
-            {/* SEARCH BAR (UI only for now) */}
-            <View className="w-[90%] mb-3">
-              <View className="flex-row-reverse items-center bg-[#F4EFE4] rounded-3xl px-4 py-2">
-                <Text className="flex-1 text-right text-[#999] font-madani">
-                  ابحث في القرآن...
-                </Text>
-              </View>
-            </View>
-
-            {/* SURAH SLIDER – all ١١٤ سور, horizontally scrollable */}
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{
-                flexDirection: "row-reverse",
-                alignItems: "center",
-                paddingHorizontal: 24,
-              }}
-            >
-              {SURAHS.map((s) => {
-                const active = s.name === surahName;
-                return (
-                  <Pressable
-                    key={s.id}
-                    onPress={() => onJumpToSurah && onJumpToSurah(s.id)}
-                    className="items-center mx-3"
-                  >
-                    <SurahBanner
-                      label={s.name}
-                      size="md"
-                      textStyle={{
-                        color: active ? "#C79A3A" : "#1F1F1F",
-                      }}
-                    />
-
-                    {/* underline / dot for active surah */}
-                    <View className="h-[3px] w-10 mt-1 rounded-full bg-transparent">
-                      {active && (
-                        <View className="h-[3px] w-full bg-[#C79A3A] rounded-full" />
-                      )}
-                    </View>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </View>
-
-          {/* BOTTOM PAGE CONTROLS – stick to bottom */}
-          <View
-            pointerEvents="box-none"
-            className="absolute left-0 right-0 bottom-10 items-center z-50"
-          />
-        </>
-      )}
     </View>
   );
 }

@@ -116,8 +116,8 @@ export default function SurahBanner({
       break;
     case "page":
       imageSource = require("../assets/images/surah_banner.png");
-      // Page banner is wide, text centered
-      textWidthPercent = "100%";
+      // Page banner is wide, text centered within the frame
+      textWidthPercent = "60%";
       textAlign = "center";
       break;
     default:
@@ -161,14 +161,15 @@ export default function SurahBanner({
         ]}
       >
         <Text
-          className="text-[#1F1F1F] font-uthmanic"
+          className="text-[#1F1F1F] font-scheherazade"
           numberOfLines={1}
           style={[
             {
+              fontFamily: "Scheherazade",
               fontSize: computedFontSize,
               lineHeight: computedLineHeight,
               textAlign: "center", // Text itself is centered within its constrained width
-              width: variant === "default" ? (isLarge ? "100%" : undefined) : textWidthPercent,
+              width: variant === "default" ? (isLarge ? "100%" : undefined) : textWidthPercent as `${number}%`,
               writingDirection: "rtl",
             },
             textStyle,

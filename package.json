@@ -19,6 +19,7 @@
     "@react-navigation/drawer": "^7.5.0",
     "@react-navigation/elements": "^2.6.3",
     "@react-navigation/native": "^7.1.8",
+    "codex": "^0.2.3",
     "expo": "~54.0.31",
     "expo-constants": "~18.0.13",
     "expo-file-system": "~19.0.6",

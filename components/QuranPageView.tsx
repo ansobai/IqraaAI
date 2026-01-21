@@ -25,6 +25,7 @@ const DEFAULT_LINE_COUNT = 15;
 const PAGE_1_LINE_COUNT = 9;
 const PAGE_2_LINE_COUNT = 8;
 const CHAR_WIDTH_FACTOR = 0.35;
+const WORD_SPACING = 3;
 
 const TEXT_BLOCK_RATIO = 1.55; // Height / Width of the text area
 const TEXT_BLOCK_PADDING_HORIZONTAL = 20; // Padding inside the text block
@@ -516,19 +517,44 @@ export default function QuranPageView({
     setLineScaleByIndex({});
   }, [fontSize, maxTextWidth, lines.length]);
 
+  // Scale ayah markers up while keeping them within line height to avoid clipping.
   const markerFontSize = fontSize
-    ? Math.max(12, Math.round(fontSize * 0.98)) // 15% smaller than previous marker size
+    ? Math.max(
+        12,
+        Math.min(
+          Math.round(fontSize * 0.98 * 1.5),
+          Math.round(lineHeight * 0.95)
+        )
+      )
     : 0;
   const markerTextColor = "#5B3A0D";
 
   const handleLineLayout = useCallback(
-    (index: number, measuredWidth: number) => {
+    (
+      index: number,
+      measuredWidth: number,
+      tokenCount: number,
+      isRagged: boolean
+    ) => {
       if (!maxTextWidth || !measuredWidth) return;
 
-      const nextScale =
-        measuredWidth > maxTextWidth
-          ? Math.min(1, (maxTextWidth / measuredWidth) * 0.98)
-          : 1;
+      let nextScale = 1;
+      const gapCount = Math.max(0, tokenCount - 1);
+      const totalGap = gapCount * WORD_SPACING;
+
+      if (isRagged) {
+        const totalWidth = measuredWidth + totalGap;
+        if (totalWidth > maxTextWidth) {
+          nextScale = maxTextWidth / totalWidth;
+        }
+      } else {
+        const availableForContent = maxTextWidth - totalGap;
+        if (measuredWidth > 1) {
+          nextScale = availableForContent / measuredWidth;
+        }
+      }
+
+      if (!isFinite(nextScale) || nextScale <= 0) nextScale = 1;
 
       setLineScaleByIndex((prev) => {
         const current = prev[index] ?? 1;
@@ -633,14 +659,19 @@ export default function QuranPageView({
     const isRagged = line.isLast;
 
     const lineScale = lineScaleByIndex[index] ?? 1;
-    const lineFontSize = fontSize * lineScale;
-    const lineMarkerFontSize = markerFontSize * lineScale;
+    const lineFontSize = fontSize;
+    const lineMarkerFontSize = markerFontSize;
 
     return (
       <View key={`line-text-${index}`} style={lineStyle}>
         <View
           onLayout={(event) =>
-            handleLineLayout(index, event.nativeEvent.layout.width)
+            handleLineLayout(
+              index,
+              event.nativeEvent.layout.width,
+              line.tokens.length,
+              isRagged
+            )
           }
           style={{
             position: "absolute",
@@ -650,7 +681,7 @@ export default function QuranPageView({
             flexDirection: "row-reverse",
             justifyContent: "flex-start",
             alignItems: "center",
-            columnGap: isRagged ? 5 : 0,
+            columnGap: 0,
           }}
         >
           {renderLineTokens(
@@ -663,10 +694,12 @@ export default function QuranPageView({
         <View
           style={{
             flexDirection: "row-reverse",
-            justifyContent: isRagged ? "flex-start" : "space-between",
+            justifyContent: "flex-start",
             alignItems: "center",
-            columnGap: isRagged ? 5 : 0, // Add explicit gap for ragged lines, justified lines manage space via space-between but we size for it now
-            width: "100%",
+            columnGap: lineScale > 0 ? WORD_SPACING / lineScale : 0,
+            width: "auto",
+            alignSelf: isRagged ? "flex-end" : "center",
+            transform: [{ scaleX: lineScale }],
           }}
         >
           {renderLineTokens(

@@ -105,12 +105,12 @@ export default function SurahBanner({
   
   switch (variant) {
     case "left":
-      imageSource = require("../assets/images/surah_name_border_left_2.png");
+      imageSource = require("../assets/images/surah_name_border.png");
       textWidthPercent = "60%"; // Constrain width
       textAlign = "left"; // Align to visible side
       break;
     case "right":
-      imageSource = require("../assets/images/surah_name_border_right_2.png");
+      imageSource = require("../assets/images/surah_name_border.png");
       textWidthPercent = "60%";
       textAlign = "right";
       break;
@@ -121,7 +121,7 @@ export default function SurahBanner({
       textAlign = "center";
       break;
     default:
-      imageSource = require("../assets/images/surah_name-border.png");
+      imageSource = require("../assets/images/surah_name_border.png");
       break;
   }
 
@@ -168,7 +168,7 @@ export default function SurahBanner({
               fontFamily: "Scheherazade",
               fontSize: computedFontSize,
               lineHeight: computedLineHeight,
-              textAlign: "center", // Text itself is centered within its constrained width
+              textAlign, // Text alignment respects variant position
               width: variant === "default" ? (isLarge ? "100%" : undefined) : textWidthPercent as `${number}%`,
               writingDirection: "rtl",
             },

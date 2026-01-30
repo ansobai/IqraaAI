@@ -12,8 +12,10 @@ import React, {
 import {
   InteractionManager,
   LayoutChangeEvent,
+  ScrollView,
   TextInput,
   View,
+  useWindowDimensions,
 } from "react-native";
 import { Gesture } from "react-native-gesture-handler";
 import Animated, {
@@ -23,8 +25,8 @@ import Animated, {
 } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import QuranPager from "../../components/QuranPager";
 import QuranPage from "../../components/QuranPage";
+import QuranPager from "../../components/QuranPager";
 import SurahCarousel from "../../components/SurahCarousel";
 import { LAST_READ_PAGE_KEY } from "../../constants/storage";
 import { ARABIC_SURAHS } from "../../constants/surahNames";
@@ -57,6 +59,9 @@ const PAGE_ASPECT_RATIO = 729.448 / 510.236;
 const PAGE_HORIZONTAL_PADDING = 8;
 const PAGE_TOP_PADDING = 0;
 const PAGE_BOTTOM_PADDING = 0;
+const LANDSCAPE_HORIZONTAL_PADDING = 0;
+const LANDSCAPE_TOP_PADDING = 0;
+const LANDSCAPE_BOTTOM_PADDING = 0;
 const NORMAL_SCALE = 1.36;
 const FIRST_PAGES_SCALE = NORMAL_SCALE;
 const MINI_SCALE = 0.85;
@@ -105,6 +110,8 @@ export default function SurahScreen() {
   const backgroundPrefetchCancelRef = useRef<(() => void) | null>(null);
   const [isMini, setIsMini] = useState(false);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
+  const windowDimensions = useWindowDimensions();
+  const isLandscape = windowDimensions.width > windowDimensions.height;
 
   const pinchScale = useSharedValue(1);
   const pageScaleValue = useSharedValue(NORMAL_SCALE);
@@ -223,11 +230,20 @@ export default function SurahScreen() {
     }
   }, [isMini, pinchScale]);
 
+  useEffect(() => {
+    if (!isLandscape) return;
+    pinchScale.value = 1;
+    if (isMini) {
+      setIsMini(false);
+    }
+  }, [isLandscape, isMini, pinchScale]);
+
   const pageScale = useMemo(() => {
+    if (isLandscape) return 1;
     const pageNumber = page?.pageNumber ?? FALLBACK_PAGE_NUMBER;
     const baseScale = pageNumber <= 2 ? FIRST_PAGES_SCALE : NORMAL_SCALE;
     return isMini ? baseScale * MINI_SCALE : baseScale;
-  }, [isMini, page?.pageNumber]);
+  }, [isLandscape, isMini, page?.pageNumber]);
 
   useEffect(() => {
     pageScaleValue.value = pageScale;
@@ -249,10 +265,20 @@ export default function SurahScreen() {
   }, []);
 
   const pageSize = useMemo(() => {
-    const maxWidth = Math.max(0, viewport.width - PAGE_HORIZONTAL_PADDING * 2);
+    const layoutWidth = viewport.width || windowDimensions.width;
+    const layoutHeight = viewport.height || windowDimensions.height;
+    if (!layoutWidth || !layoutHeight) return { width: 0, height: 0 };
+
+    if (isLandscape) {
+      const width = Math.max(0, layoutWidth - LANDSCAPE_HORIZONTAL_PADDING * 2);
+      const height = width * PAGE_ASPECT_RATIO;
+      return { width, height };
+    }
+
+    const maxWidth = Math.max(0, layoutWidth - PAGE_HORIZONTAL_PADDING * 2);
     const maxHeight = Math.max(
       0,
-      viewport.height - (PAGE_TOP_PADDING + PAGE_BOTTOM_PADDING),
+      layoutHeight - (PAGE_TOP_PADDING + PAGE_BOTTOM_PADDING),
     );
     if (!maxWidth || !maxHeight) return { width: 0, height: 0 };
 
@@ -272,7 +298,7 @@ export default function SurahScreen() {
     }
 
     return { width, height };
-  }, [viewport]);
+  }, [isLandscape, viewport, windowDimensions.height, windowDimensions.width]);
 
   const animatedStyle = useAnimatedStyle(() => {
     const scale = pageScaleValue.value * pinchScale.value;
@@ -281,8 +307,10 @@ export default function SurahScreen() {
     };
   });
 
+  const gesturesEnabled = !isLandscape;
+
   const pinch = Gesture.Pinch()
-    .enabled(!isMini)
+    .enabled(!isMini && gesturesEnabled)
     .onUpdate((event) => {
       let next = event.scale;
 
@@ -301,6 +329,7 @@ export default function SurahScreen() {
     });
 
   const doubleTap = Gesture.Tap()
+    .enabled(gesturesEnabled)
     .numberOfTaps(2)
     .maxDelay(250)
     .onEnd(() => {
@@ -335,6 +364,13 @@ export default function SurahScreen() {
   );
 
   const carouselIndex = Math.max(0, Math.min(SURAH_ITEMS.length - 1, id - 1));
+  const horizontalPadding = isLandscape
+    ? LANDSCAPE_HORIZONTAL_PADDING
+    : PAGE_HORIZONTAL_PADDING;
+  const topPadding = isLandscape ? LANDSCAPE_TOP_PADDING : PAGE_TOP_PADDING;
+  const bottomPadding = isLandscape
+    ? LANDSCAPE_BOTTOM_PADDING
+    : PAGE_BOTTOM_PADDING;
 
   return (
     <SafeAreaView className="flex-1 bg-[#FFFDF5]" edges={["top", "bottom"]}>
@@ -371,38 +407,70 @@ export default function SurahScreen() {
         className="flex-1 items-center justify-center"
         onLayout={handleViewportLayout}
       >
-        <View
-          className="w-full items-center"
-          style={{
-            paddingHorizontal: PAGE_HORIZONTAL_PADDING,
-            paddingTop: PAGE_TOP_PADDING,
-            paddingBottom: PAGE_BOTTOM_PADDING,
-          }}
-        >
-          <Animated.View
-            style={[
-              {
+        {isLandscape ? (
+          <ScrollView
+            style={{ flex: 1, alignSelf: "stretch" }}
+            contentContainerStyle={{
+              alignItems: "center",
+              paddingHorizontal: horizontalPadding,
+              paddingTop: topPadding,
+              paddingBottom: bottomPadding,
+            }}
+            showsVerticalScrollIndicator={false}
+          >
+            <View
+              style={{
                 width: pageSize.width,
                 height: pageSize.height,
                 alignSelf: "center",
-                overflow: "visible",
-              },
-              animatedStyle,
-            ]}
+              }}
+            >
+              {pageSize.width > 0 && pageSize.height > 0 ? (
+                <QuranPager
+                  data={PAGE_NUMBERS}
+                  initialIndex={pageIndex}
+                  onIndexChange={setPageIndex}
+                  renderItem={renderPage}
+                  scrollEnabled
+                  pageWidth={pageSize.width}
+                />
+              ) : null}
+            </View>
+          </ScrollView>
+        ) : (
+          <View
+            className="w-full items-center"
+            style={{
+              paddingHorizontal: horizontalPadding,
+              paddingTop: topPadding,
+              paddingBottom: bottomPadding,
+            }}
           >
-            {pageSize.width > 0 && pageSize.height > 0 ? (
-              <QuranPager
-                data={PAGE_NUMBERS}
-                initialIndex={pageIndex}
-                onIndexChange={setPageIndex}
-                renderItem={renderPage}
-                scrollEnabled={!isMini}
-                pageWidth={pageSize.width}
-                simultaneousGestures={[pinch, doubleTap]}
-              />
-            ) : null}
-          </Animated.View>
-        </View>
+            <Animated.View
+              style={[
+                {
+                  width: pageSize.width,
+                  height: pageSize.height,
+                  alignSelf: "center",
+                  overflow: "visible",
+                },
+                animatedStyle,
+              ]}
+            >
+              {pageSize.width > 0 && pageSize.height > 0 ? (
+                <QuranPager
+                  data={PAGE_NUMBERS}
+                  initialIndex={pageIndex}
+                  onIndexChange={setPageIndex}
+                  renderItem={renderPage}
+                  scrollEnabled
+                  pageWidth={pageSize.width}
+                  simultaneousGestures={[pinch, doubleTap]}
+                />
+              ) : null}
+            </Animated.View>
+          </View>
+        )}
       </View>
     </SafeAreaView>
   );

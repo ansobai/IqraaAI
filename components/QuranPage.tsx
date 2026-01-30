@@ -123,11 +123,11 @@ function QuranPage({
   }, [svgXml, hideSideMarkers, pageNumber, highlightedVerseId, highlightColor]);
 
   if (!renderedXml) {
-    return <View className="flex-1 bg-[#FFFDF5]" />;
+    return <View className="flex-1 bg-[#FFFFFF]" />;
   }
 
   return (
-    <View className="flex-1 bg-[#FFFDF5]">
+    <View className="flex-1 bg-[#FFFFFF]">
       <SvgXml
         xml={renderedXml}
         width="100%"

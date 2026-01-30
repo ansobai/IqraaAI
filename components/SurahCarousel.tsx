@@ -91,7 +91,6 @@ export default function SurahCarousel({ data, onSelect, initialScrollIndex = 0 }
     
     let variant: "default" | "left" | "right" = "default";
     let isActive = false;
-    const isRightEdge = index === 0;
 
     if (index === activeIndex) {
       isActive = true;
@@ -110,11 +109,7 @@ export default function SurahCarousel({ data, onSelect, initialScrollIndex = 0 }
       variant = index < activeIndex ? "right" : "left";
     }
 
-    if (isRightEdge && variant === "right") {
-      variant = "default";
-    }
-
-    const shouldDeemphasize = !isActive && !isRightEdge;
+    const shouldDeemphasize = !isActive;
 
     return (
       <Pressable
@@ -125,7 +120,7 @@ export default function SurahCarousel({ data, onSelect, initialScrollIndex = 0 }
           justifyContent: "center",
           // Scale effect for active item could be nice, user asked for "middle one is current"
           transform: [{ scale: shouldDeemphasize ? 0.9 : 1 }],
-          opacity: shouldDeemphasize ? 0.7 : 1,
+          opacity: 1,
         }}
       >
         <SurahBanner

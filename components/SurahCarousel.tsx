@@ -59,7 +59,6 @@ export default function SurahCarousel({ data, onSelect, initialScrollIndex = 0 }
     const offsetX = event.nativeEvent.contentOffset.x;
     const index = getIndexFromOffset(offsetX);
     setActiveIndex(index);
-    selectIndex(index);
   };
 
   // Scroll to initial index on mount if needed

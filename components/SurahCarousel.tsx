@@ -1,11 +1,10 @@
-import React, { useRef, useState, useEffect } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   FlatList,
   Dimensions,
   View,
   NativeSyntheticEvent,
   NativeScrollEvent,
-  StyleSheet,
   Pressable,
 } from "react-native";
 import SurahBanner from "./SurahBanner";
@@ -27,28 +26,58 @@ interface Props {
 export default function SurahCarousel({ data, onSelect, initialScrollIndex = 0 }: Props) {
   const flatListRef = useRef<FlatList>(null);
   const [activeIndex, setActiveIndex] = useState(initialScrollIndex);
+  const lastSelectedIdRef = useRef<number | null>(data[initialScrollIndex]?.id ?? null);
+
+  const getIndexFromOffset = useCallback(
+    (offsetX: number) => {
+      const rawIndex = Math.round(offsetX / ITEM_WIDTH);
+      return Math.max(0, Math.min(data.length - 1, rawIndex));
+    },
+    [data.length],
+  );
+
+  const selectIndex = useCallback(
+    (index: number, options?: { force?: boolean }) => {
+      const item = data[index];
+      if (!item) return;
+      if (!options?.force && lastSelectedIdRef.current === item.id) return;
+      lastSelectedIdRef.current = item.id;
+      onSelect(item.id);
+    },
+    [data, onSelect],
+  );
 
   // Handle scroll to determine active index
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const offsetX = event.nativeEvent.contentOffset.x;
     // In inverted list, offset increases as we scroll left (to higher indices)
-    const index = Math.round(offsetX / ITEM_WIDTH);
+    const index = getIndexFromOffset(offsetX);
     setActiveIndex(index);
+  };
+
+  const onScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const offsetX = event.nativeEvent.contentOffset.x;
+    const index = getIndexFromOffset(offsetX);
+    setActiveIndex(index);
+    selectIndex(index);
   };
 
   // Scroll to initial index on mount if needed
   useEffect(() => {
-    if (initialScrollIndex > 0 && flatListRef.current) {
-        // We use a timeout to ensure layout is measured
-        setTimeout(() => {
-            flatListRef.current?.scrollToIndex({
-                index: initialScrollIndex,
-                animated: false,
-                viewPosition: 0.5,
-            });
-        }, 100);
+    lastSelectedIdRef.current = data[initialScrollIndex]?.id ?? null;
+    setActiveIndex(initialScrollIndex);
+
+    if (flatListRef.current) {
+      // We use a timeout to ensure layout is measured
+      setTimeout(() => {
+        flatListRef.current?.scrollToIndex({
+          index: initialScrollIndex,
+          animated: false,
+          viewPosition: 0.5,
+        });
+      }, 100);
     }
-  }, [initialScrollIndex]);
+  }, [data, initialScrollIndex]);
 
   const getItemLayout = (_: any, index: number) => ({
     length: ITEM_WIDTH,
@@ -63,6 +92,7 @@ export default function SurahCarousel({ data, onSelect, initialScrollIndex = 0 }
     
     let variant: "default" | "left" | "right" = "default";
     let isActive = false;
+    const isRightEdge = index === 0;
 
     if (index === activeIndex) {
       isActive = true;
@@ -81,16 +111,22 @@ export default function SurahCarousel({ data, onSelect, initialScrollIndex = 0 }
       variant = index < activeIndex ? "right" : "left";
     }
 
+    if (isRightEdge && variant === "right") {
+      variant = "default";
+    }
+
+    const shouldDeemphasize = !isActive && !isRightEdge;
+
     return (
       <Pressable
-        onPress={() => onSelect(item.id)}
+        onPress={() => selectIndex(index, { force: true })}
         style={{
           width: ITEM_WIDTH,
           alignItems: "center",
           justifyContent: "center",
           // Scale effect for active item could be nice, user asked for "middle one is current"
-          transform: [{ scale: isActive ? 1.0 : 0.9 }],
-          opacity: isActive ? 1 : 0.7,
+          transform: [{ scale: shouldDeemphasize ? 0.9 : 1 }],
+          opacity: shouldDeemphasize ? 0.7 : 1,
         }}
       >
         <SurahBanner
@@ -126,6 +162,8 @@ export default function SurahCarousel({ data, onSelect, initialScrollIndex = 0 }
         }}
         onScroll={onScroll}
         scrollEventThrottle={16} // 60fps
+        onMomentumScrollEnd={onScrollEnd}
+        onScrollEndDrag={onScrollEnd}
         getItemLayout={getItemLayout}
         renderItem={renderItem}
         initialNumToRender={5}

@@ -1,16 +1,18 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState } from "react";
 import { Dimensions, StyleSheet, View } from "react-native";
-import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import {
+  Gesture,
+  GestureDetector,
+  type GestureType,
+} from "react-native-gesture-handler";
 import Animated, {
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
-  withSpring,
   withTiming,
-  useAnimatedReaction,
 } from "react-native-reanimated";
 
-const { width } = Dimensions.get("window");
+const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
 interface QuranPagerProps<T> {
   data: T[];
@@ -18,6 +20,8 @@ interface QuranPagerProps<T> {
   onIndexChange: (index: number) => void;
   renderItem: (props: { item: T; index: number }) => React.ReactNode;
   scrollEnabled?: boolean;
+  pageWidth?: number;
+  simultaneousGestures?: GestureType[];
 }
 
 export default function QuranPager<T>({
@@ -26,21 +30,24 @@ export default function QuranPager<T>({
   onIndexChange,
   renderItem,
   scrollEnabled = true,
+  pageWidth,
+  simultaneousGestures,
 }: QuranPagerProps<T>) {
   const [index, setIndex] = useState(initialIndex);
+  const effectiveWidth = Math.max(1, pageWidth ?? SCREEN_WIDTH);
   
   // The master offset of the container. 
   // 0 -> Page 0 is visible.
   // width -> Page 1 is visible (content is shifted right, page 1 was at -width).
   // index * width -> Page index is visible.
-  const offset = useSharedValue(initialIndex * width);
+  const offset = useSharedValue(initialIndex * effectiveWidth);
   const contextOffset = useSharedValue(0);
 
   // Sync internal state if initialIndex prop changes (e.g. jump from surah list)
   useEffect(() => {
     setIndex(initialIndex);
-    offset.value = initialIndex * width;
-  }, [initialIndex, offset]);
+    offset.value = initialIndex * effectiveWidth;
+  }, [initialIndex, effectiveWidth, offset]);
 
   // Notify parent of index changes only when animation settles
   const handleIndexChange = (newIndex: number) => {
@@ -52,6 +59,8 @@ export default function QuranPager<T>({
 
   const pan = Gesture.Pan()
     .enabled(scrollEnabled)
+    .minPointers(1)
+    .maxPointers(1)
     .activeOffsetX([-20, 20])
     .onStart(() => {
       contextOffset.value = offset.value;
@@ -65,7 +74,7 @@ export default function QuranPager<T>({
         nextOffset *= 0.5;
       }
       // End boundary (Last Page) -> offset cannot go > (N-1)*width
-      const maxOffset = (data.length - 1) * width;
+      const maxOffset = (data.length - 1) * effectiveWidth;
       if (nextOffset > maxOffset) {
         // Apply resistance relative to the boundary
         const overscroll = nextOffset - maxOffset;
@@ -75,8 +84,8 @@ export default function QuranPager<T>({
       offset.value = nextOffset;
     })
     .onEnd((event) => {
-      const currentPos = offset.value / width;
-      const velocity = event.velocityX / width; // Normalize velocity
+      const currentPos = offset.value / effectiveWidth;
+      const velocity = event.velocityX / effectiveWidth; // Normalize velocity
       
       // Determine target page index based on position and velocity
       let targetIndex = Math.round(currentPos);
@@ -94,7 +103,7 @@ export default function QuranPager<T>({
       targetIndex = Math.max(0, Math.min(targetIndex, data.length - 1));
 
       // Animate to target
-      const targetOffset = targetIndex * width;
+      const targetOffset = targetIndex * effectiveWidth;
       
       offset.value = withTiming(targetOffset, { duration: 250 }, (finished) => {
         if (finished) {
@@ -115,18 +124,25 @@ export default function QuranPager<T>({
     // Absolute position: Page i is always at -i * width (RTL Layout)
     // Since we translate container by +index*width,
     // Page i at -index*width becomes visible at 0.
-    const left = -targetIndex * width;
+    const left = -targetIndex * effectiveWidth;
 
     return (
-      <View key={targetIndex} style={[styles.page, { left }]}>
+      <View
+        key={targetIndex}
+        style={[styles.page, { left, width: effectiveWidth }]}
+      >
         {renderItem({ item: data[targetIndex], index: targetIndex })}
       </View>
     );
   });
 
+  const composedGesture = simultaneousGestures?.length
+    ? Gesture.Simultaneous(pan, ...simultaneousGestures)
+    : pan;
+
   return (
     <View style={styles.container}>
-      <GestureDetector gesture={pan}>
+      <GestureDetector gesture={composedGesture}>
         <Animated.View style={[styles.track, animatedStyle]}>
           {pagesToRender}
         </Animated.View>
@@ -149,9 +165,10 @@ const styles = StyleSheet.create({
     height: "100%",
   },
   page: {
-    ...StyleSheet.absoluteFillObject,
-    width,
-    // Ensure pages don't shrink or grow unexpectedly
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    // width is applied inline to keep it in sync with layout
     flex: 0,
   },
 });

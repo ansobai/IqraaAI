@@ -2,15 +2,20 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import
-  {
-    InteractionManager,
-    LayoutChangeEvent,
-    TextInput,
-    View,
-  } from "react-native";
-import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  InteractionManager,
+  LayoutChangeEvent,
+  TextInput,
+  View,
+} from "react-native";
+import { Gesture } from "react-native-gesture-handler";
 import Animated, {
   runOnJS,
   useAnimatedStyle,
@@ -18,34 +23,34 @@ import Animated, {
 } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import QuranReader from "../../components/QuranReader";
+import QuranPager from "../../components/QuranPager";
+import QuranPage from "../../components/QuranPage";
 import SurahCarousel from "../../components/SurahCarousel";
 import { LAST_READ_PAGE_KEY } from "../../constants/storage";
 import { ARABIC_SURAHS } from "../../constants/surahNames";
-import
-  {
-    MUSHAF_PAGES,
-    MUSHAF_SURAH_START_PAGE,
-    type MushafPage,
-  } from "../../utils/mushafData";
-import
-  {
-    QURAN_PAGE_NUMBERS,
-    prefetchQuranPageSvgs,
-  } from "../../utils/quranSvgRegistry";
+import {
+  MUSHAF_PAGES,
+  MUSHAF_SURAH_START_PAGE,
+  getSurahIdForPageNumber,
+  type MushafPage,
+} from "../../utils/mushafData";
+import {
+  QURAN_PAGE_NUMBERS,
+  prefetchQuranPageSvgs,
+} from "../../utils/quranSvgRegistry";
 
 // Load static data once
 const PAGES = MUSHAF_PAGES as MushafPage[];
 const SURAH_MAP = MUSHAF_SURAH_START_PAGE as Record<string, number>;
 const FALLBACK_PAGE_INDEX = Math.max(
   PAGES.findIndex((p) => p.pageNumber === 1),
-  0
+  0,
 );
 const FALLBACK_PAGE_NUMBER = PAGES[FALLBACK_PAGE_INDEX]?.pageNumber ?? 1;
 
 const PAGE_NUMBERS = PAGES.map((page) => page.pageNumber);
 const SURAH_ITEMS = ARABIC_SURAHS.map((name, id) => ({ id, name })).filter(
-  (item) => item.id > 0
+  (item) => item.id > 0,
 );
 
 const PAGE_ASPECT_RATIO = 729.448 / 510.236;
@@ -58,11 +63,26 @@ const MINI_SCALE = 0.85;
 const MINI_TRIGGER_SCALE = 0.7;
 const MIN_PINCH_SCALE = 0.5;
 const MAX_PINCH_SCALE = 3;
+const PREFETCH_WINDOW = 3;
+const BACKGROUND_PREFETCH_CHUNK_SIZE = 1;
+const BACKGROUND_PREFETCH_STAGGER_MS = 24;
+const BACKGROUND_PREFETCH_DELAY_MS = 400;
+
+const getNearbyPages = (pageNumber: number, windowSize: number) =>
+  Array.from(
+    { length: windowSize * 2 + 1 },
+    (_, offset) => pageNumber - windowSize + offset,
+  );
 
 export default function SurahScreen() {
-  const { surahId } = useLocalSearchParams<{ surahId?: string }>();
-  const id = Number(surahId ?? 1); // chapter number 1..114
+  const { surahId, startAt } = useLocalSearchParams<{
+    surahId?: string;
+    startAt?: string;
+  }>();
+  const parsedId = Number(surahId ?? 1);
+  const id = Number.isFinite(parsedId) && parsedId > 0 ? parsedId : 1; // chapter number 1..114
   const router = useRouter();
+  const forceFirstPage = startAt === "first";
 
   // First page number of this surah from surahMap
   const firstPageNumber = useMemo(() => {
@@ -80,7 +100,7 @@ export default function SurahScreen() {
   const hasRestoredRef = useRef(false);
   const [didRestorePage, setDidRestorePage] = useState(false);
   const [restoredPageNumber, setRestoredPageNumber] = useState<number | null>(
-    null
+    null,
   );
   const backgroundPrefetchCancelRef = useRef<(() => void) | null>(null);
   const [isMini, setIsMini] = useState(false);
@@ -102,21 +122,36 @@ export default function SurahScreen() {
         if (!isActive) return;
 
         const savedNumber = saved ? Number(saved) : NaN;
+        if (forceFirstPage) {
+          setPageIndex(initialIndex);
+          setRestoredPageNumber(
+            PAGES[initialIndex]?.pageNumber ?? FALLBACK_PAGE_NUMBER,
+          );
+          return;
+        }
+
         const savedIndex = Number.isFinite(savedNumber)
           ? PAGES.findIndex((p) => p.pageNumber === savedNumber)
           : -1;
+        const savedSurahId = Number.isFinite(savedNumber)
+          ? getSurahIdForPageNumber(savedNumber)
+          : null;
 
-        if (savedIndex >= 0) {
+        if (savedIndex >= 0 && savedSurahId === id) {
           setPageIndex(savedIndex);
           setRestoredPageNumber(savedNumber);
         } else {
-          setPageIndex(FALLBACK_PAGE_INDEX);
-          setRestoredPageNumber(FALLBACK_PAGE_NUMBER);
+          setPageIndex(initialIndex);
+          setRestoredPageNumber(
+            PAGES[initialIndex]?.pageNumber ?? FALLBACK_PAGE_NUMBER,
+          );
         }
       } catch {
         if (isActive) {
-          setPageIndex(FALLBACK_PAGE_INDEX);
-          setRestoredPageNumber(FALLBACK_PAGE_NUMBER);
+          setPageIndex(initialIndex);
+          setRestoredPageNumber(
+            PAGES[initialIndex]?.pageNumber ?? FALLBACK_PAGE_NUMBER,
+          );
         }
       } finally {
         if (isActive) {
@@ -137,9 +172,7 @@ export default function SurahScreen() {
     const pageNumber = PAGES[pageIndex]?.pageNumber;
     if (!pageNumber) return;
 
-    const nearbyPages = Array.from({ length: 11 }, (_, offset) => {
-      return pageNumber - 2 + offset;
-    });
+    const nearbyPages = getNearbyPages(pageNumber, PREFETCH_WINDOW);
     prefetchQuranPageSvgs(nearbyPages);
   }, [pageIndex]);
 
@@ -148,25 +181,29 @@ export default function SurahScreen() {
 
     const pageNumber = restoredPageNumber ?? FALLBACK_PAGE_NUMBER;
 
-    const nearbySet = new Set(
-      Array.from({ length: 11 }, (_, offset) => pageNumber - 2 + offset)
-    );
+    const nearbySet = new Set(getNearbyPages(pageNumber, PREFETCH_WINDOW));
     const remainingPages = QURAN_PAGE_NUMBERS.filter(
-      (num) => !nearbySet.has(num)
+      (num) => !nearbySet.has(num),
     );
 
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
     const interactionHandle = InteractionManager.runAfterInteractions(() => {
-      backgroundPrefetchCancelRef.current = prefetchQuranPageSvgs(
-        remainingPages,
-        {
-          chunkSize: 8,
-          staggerMs: 12,
-        }
-      );
+      timeoutId = setTimeout(() => {
+        backgroundPrefetchCancelRef.current = prefetchQuranPageSvgs(
+          remainingPages,
+          {
+            chunkSize: BACKGROUND_PREFETCH_CHUNK_SIZE,
+            staggerMs: BACKGROUND_PREFETCH_STAGGER_MS,
+          },
+        );
+      }, BACKGROUND_PREFETCH_DELAY_MS);
     });
 
     return () => {
       interactionHandle?.cancel?.();
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
       backgroundPrefetchCancelRef.current?.();
       backgroundPrefetchCancelRef.current = null;
     };
@@ -188,8 +225,7 @@ export default function SurahScreen() {
 
   const pageScale = useMemo(() => {
     const pageNumber = page?.pageNumber ?? FALLBACK_PAGE_NUMBER;
-    const baseScale =
-      pageNumber <= 2 ? FIRST_PAGES_SCALE : NORMAL_SCALE;
+    const baseScale = pageNumber <= 2 ? FIRST_PAGES_SCALE : NORMAL_SCALE;
     return isMini ? baseScale * MINI_SCALE : baseScale;
   }, [isMini, page?.pageNumber]);
 
@@ -200,7 +236,7 @@ export default function SurahScreen() {
   useEffect(() => {
     if (!page?.pageNumber) return;
     AsyncStorage.setItem(LAST_READ_PAGE_KEY, String(page.pageNumber)).catch(
-      () => {}
+      () => {},
     );
   }, [page?.pageNumber]);
 
@@ -213,13 +249,10 @@ export default function SurahScreen() {
   }, []);
 
   const pageSize = useMemo(() => {
-    const maxWidth = Math.max(
-      0,
-      viewport.width - PAGE_HORIZONTAL_PADDING * 2
-    );
+    const maxWidth = Math.max(0, viewport.width - PAGE_HORIZONTAL_PADDING * 2);
     const maxHeight = Math.max(
       0,
-      viewport.height - (PAGE_TOP_PADDING + PAGE_BOTTOM_PADDING)
+      viewport.height - (PAGE_TOP_PADDING + PAGE_BOTTOM_PADDING),
     );
     if (!maxWidth || !maxHeight) return { width: 0, height: 0 };
 
@@ -274,26 +307,45 @@ export default function SurahScreen() {
       runOnJS(toggleMiniMode)();
     });
 
-  const gesture = Gesture.Simultaneous(pinch, doubleTap);
+  const renderPage = useCallback(
+    ({ item }: { item: number; index: number }) => (
+      <QuranPage pageNumber={item} hideSideMarkers={!isMini} />
+    ),
+    [isMini],
+  );
+
+  const getFirstPageIndexForSurah = useCallback((surahNumber: number) => {
+    const firstPage = SURAH_MAP[String(surahNumber)] ?? FALLBACK_PAGE_NUMBER;
+    const idx = PAGES.findIndex((p) => p.pageNumber === firstPage);
+    return idx === -1 ? FALLBACK_PAGE_INDEX : idx;
+  }, []);
 
   const handleSelectSurah = useCallback(
     (surahNumber: number) => {
-      router.replace(`/(surahs)/${surahNumber}`);
+      setPageIndex(getFirstPageIndexForSurah(surahNumber));
+      router.replace({
+        pathname: "/(surahs)/[surahId]",
+        params: {
+          surahId: String(surahNumber),
+          startAt: "first",
+        },
+      });
     },
-    [router]
+    [getFirstPageIndexForSurah, router],
   );
 
-  const carouselIndex = Math.max(
-    0,
-    Math.min(SURAH_ITEMS.length - 1, id - 1)
-  );
+  const carouselIndex = Math.max(0, Math.min(SURAH_ITEMS.length - 1, id - 1));
 
   return (
     <SafeAreaView className="flex-1 bg-[#FFFDF5]" edges={["top", "bottom"]}>
       <Stack.Screen options={{ headerShown: false }} />
 
       {isMini ? (
-        <View className="pt-12 pb-2">
+        <View
+          className="pt-12 pb-2"
+          pointerEvents="box-none"
+          style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 5 }}
+        >
           <View className="px-5 mb-4">
             <View className="flex-row-reverse bg-[#F0EBE0] rounded-2xl px-4 py-2 items-center gap-2">
               <Ionicons name="search" size={20} color="#999" />
@@ -327,32 +379,29 @@ export default function SurahScreen() {
             paddingBottom: PAGE_BOTTOM_PADDING,
           }}
         >
-          <GestureDetector gesture={gesture}>
-            <Animated.View
-              style={[
-                {
-                  width: pageSize.width,
-                  height: pageSize.height,
-                  alignSelf: "center",
-                  overflow: "visible",
-                },
-                animatedStyle,
-              ]}
-            >
-              {pageSize.width > 0 && pageSize.height > 0 ? (
-                <QuranReader
-                  pages={PAGE_NUMBERS}
-                  pageIndex={pageIndex}
-                  onPageIndexChange={setPageIndex}
-                  hideSideMarkers={!isMini}
-                  style={{
-                    width: pageSize.width,
-                    height: pageSize.height,
-                  }}
-                />
-              ) : null}
-            </Animated.View>
-          </GestureDetector>
+          <Animated.View
+            style={[
+              {
+                width: pageSize.width,
+                height: pageSize.height,
+                alignSelf: "center",
+                overflow: "visible",
+              },
+              animatedStyle,
+            ]}
+          >
+            {pageSize.width > 0 && pageSize.height > 0 ? (
+              <QuranPager
+                data={PAGE_NUMBERS}
+                initialIndex={pageIndex}
+                onIndexChange={setPageIndex}
+                renderItem={renderPage}
+                scrollEnabled={!isMini}
+                pageWidth={pageSize.width}
+                simultaneousGestures={[pinch, doubleTap]}
+              />
+            ) : null}
+          </Animated.View>
         </View>
       </View>
     </SafeAreaView>

@@ -10,9 +10,14 @@ import React, {
   useState,
 } from "react";
 import {
+  ActivityIndicator,
+  FlatList,
   InteractionManager,
+  Keyboard,
   LayoutChangeEvent,
+  Pressable,
   ScrollView,
+  Text,
   TextInput,
   View,
   useWindowDimensions,
@@ -32,6 +37,7 @@ import QuranPager from "../../components/QuranPager";
 import SurahCarousel from "../../components/SurahCarousel";
 import { LAST_READ_PAGE_KEY } from "../../constants/storage";
 import { ARABIC_SURAHS } from "../../constants/surahNames";
+import { useQuranSearch } from "../../hooks/useQuranSearch";
 import {
   MUSHAF_PAGES,
   MUSHAF_SURAH_START_PAGE,
@@ -42,6 +48,8 @@ import {
   QURAN_PAGE_NUMBERS,
   prefetchQuranPageSvgs,
 } from "../../utils/quranSvgRegistry";
+import { SearchResult } from "../../utils/searchUtils";
+import { toArabicNumber } from "../../utils/toArabicNumbers";
 
 // Load static data once
 const PAGES = MUSHAF_PAGES as MushafPage[];
@@ -85,9 +93,14 @@ const getNearbyPages = (pageNumber: number, windowSize: number) =>
   );
 
 export default function SurahScreen() {
-  const { surahId, startAt } = useLocalSearchParams<{
+  const {
+    surahId,
+    startAt,
+    page: pageParam,
+  } = useLocalSearchParams<{
     surahId?: string;
     startAt?: string;
+    page?: string;
   }>();
   const parsedId = Number(surahId ?? 1);
   const id = Number.isFinite(parsedId) && parsedId > 0 ? parsedId : 1; // chapter number 1..114
@@ -117,6 +130,7 @@ export default function SurahScreen() {
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const windowDimensions = useWindowDimensions();
   const isLandscape = windowDimensions.width > windowDimensions.height;
+  const { query, setQuery, results, isSearching } = useQuranSearch();
 
   const pinchScale = useSharedValue(1);
   const baseScaleValue = useSharedValue(NORMAL_SCALE);
@@ -137,6 +151,18 @@ export default function SurahScreen() {
       try {
         const saved = await AsyncStorage.getItem(LAST_READ_PAGE_KEY);
         if (!isActive) return;
+
+        if (pageParam) {
+          const targetPage = Number(pageParam);
+          const targetIndex = PAGES.findIndex(
+            (p) => p.pageNumber === targetPage,
+          );
+          if (targetIndex !== -1) {
+            setPageIndex(targetIndex);
+            setRestoredPageNumber(targetPage);
+            return;
+          }
+        }
 
         const savedNumber = saved ? Number(saved) : NaN;
         if (forceFirstPage) {
@@ -226,11 +252,22 @@ export default function SurahScreen() {
     };
   }, [didRestorePage, restoredPageNumber]);
 
-  // Reset index if surahId changes after initial restore
+  // Reset index if surahId or page param changes after initial restore
   useEffect(() => {
     if (!hasRestoredRef.current) return;
+
+    if (pageParam) {
+      const targetPage = Number(pageParam);
+      const targetIndex = PAGES.findIndex((p) => p.pageNumber === targetPage);
+      if (targetIndex !== -1) {
+        setPageIndex(targetIndex);
+        setRestoredPageNumber(targetPage);
+        return;
+      }
+    }
+
     setPageIndex(initialIndex);
-  }, [initialIndex]);
+  }, [initialIndex, pageParam]);
 
   const page = PAGES[pageIndex] ?? PAGES[FALLBACK_PAGE_INDEX];
 
@@ -389,6 +426,45 @@ export default function SurahScreen() {
     [getFirstPageIndexForSurah, router],
   );
 
+  const handleSearchResultPress = useCallback(
+    (result: SearchResult) => {
+      setQuery("");
+      Keyboard.dismiss();
+
+      if (result.type === "surah") {
+        handleSelectSurah(result.id);
+      } else {
+        const targetIndex = PAGES.findIndex(
+          (p) => p.pageNumber === result.pageNumber,
+        );
+        if (targetIndex !== -1) {
+          setPageIndex(targetIndex);
+          setRestoredPageNumber(result.pageNumber);
+        }
+        router.replace({
+          pathname: "/(surahs)/[surahId]",
+          params: {
+            surahId: String(result.surahId),
+            page: String(result.pageNumber),
+          },
+        });
+      }
+
+      if (isMini) {
+        miniModeValue.value = 0;
+        setIsMini(false);
+      }
+    },
+    [
+      handleSelectSurah,
+      isMini,
+      miniModeValue,
+      router,
+      setQuery,
+      setRestoredPageNumber,
+    ],
+  );
+
   const carouselIndex = Math.max(0, Math.min(SURAH_ITEMS.length - 1, id - 1));
   const horizontalPadding = isLandscape
     ? LANDSCAPE_HORIZONTAL_PADDING
@@ -415,17 +491,91 @@ export default function SurahScreen() {
                 placeholder="بحث في السور..."
                 placeholderTextColor="#999"
                 className="flex-1 text-right text-base text-[#1F1F1F] font-uthmanic"
+                value={query}
+                onChangeText={setQuery}
               />
             </View>
           </View>
 
-          <View className="h-20">
-            <SurahCarousel
-              data={SURAH_ITEMS}
-              onSelect={handleSelectSurah}
-              initialScrollIndex={carouselIndex}
-            />
-          </View>
+          {query.length > 0 ? (
+            <View
+              className="mb-4 w-full bg-white rounded-2xl shadow-lg border border-[#E8E1D1] overflow-hidden"
+              style={{ maxHeight: windowDimensions.height * 0.55 }}
+            >
+              {isSearching ? (
+                <View className="py-6 items-center justify-center">
+                  <ActivityIndicator color="#2E8B57" />
+                </View>
+              ) : results.length === 0 ? (
+                <View className="py-6 items-center justify-center px-5">
+                  <Text className="text-[#1F1F1F] font-uthmanic text-2xl">
+                    لا توجد نتائج
+                  </Text>
+                </View>
+              ) : (
+                <FlatList
+                  data={results}
+                  keyExtractor={(item, index) => index.toString()}
+                  contentContainerClassName="py-2"
+                  keyboardShouldPersistTaps="handled"
+                  renderItem={({ item }) => {
+                    const rowClassName =
+                      item.type === "verse"
+                        ? "px-4 py-4 min-h-[72px] border-b border-[#F0EBE0] flex-row-reverse items-center justify-between active:bg-[#F9F9F9]"
+                        : "px-4 py-3 border-b border-[#F0EBE0] flex-row-reverse items-center justify-between active:bg-[#F9F9F9]";
+                    return (
+                      <Pressable
+                        onPress={() => handleSearchResultPress(item)}
+                        className={rowClassName}
+                      >
+                      {item.type === "surah" ? (
+                        <View className="flex-row-reverse items-center gap-3">
+                          <View className="w-8 h-8 rounded-full bg-[#E8E1D1] items-center justify-center">
+                            <Text className="text-[#8F7E5E] font-bold text-base">
+                              {toArabicNumber(item.id)}
+                            </Text>
+                          </View>
+                          <Text className="text-2xl text-[#1F1F1F] font-uthmanic font-bold">
+                            سورة {item.name}
+                          </Text>
+                        </View>
+                      ) : (
+                        <View className="flex-1">
+                          <View className="flex-row-reverse items-center gap-1 mb-0">
+                            <Text className="text-xl text-[#2E8B57] font-bold font-uthmanic">
+                              سورة {item.surahName}
+                            </Text>
+                            <Text className="text-2xl text-[#999] font-uthmanic">
+                              {toArabicNumber(Number(item.verseNumber))}
+                            </Text>
+                          </View>
+                          <Text
+                            className="text-xl text-[#1F1F1F] font-uthmanic text-right"
+                            numberOfLines={1}
+                            ellipsizeMode="clip"
+                          >
+                            {item.text}
+                          </Text>
+                        </View>
+                      )}
+                      <Ionicons name="chevron-back" size={16} color="#CCC" />
+                      </Pressable>
+                    );
+                  }}
+                />
+              )}
+            </View>
+          ) : null}
+
+          {query.length === 0 ? (
+            <View className="h-20">
+              <SurahCarousel
+                data={SURAH_ITEMS}
+                onSelect={handleSelectSurah}
+                initialScrollIndex={carouselIndex}
+              />
+            </View>
+          ) : null}
         </View>
       ) : null}
 

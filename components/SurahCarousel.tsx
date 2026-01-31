@@ -30,7 +30,8 @@ export default function SurahCarousel({ data, onSelect, initialScrollIndex = 0 }
 
   const getIndexFromOffset = useCallback(
     (offsetX: number) => {
-      const rawIndex = Math.round(offsetX / ITEM_WIDTH);
+      // The carousel shows 3 items, so the middle item is one width past the offset.
+      const rawIndex = Math.round(offsetX / ITEM_WIDTH + 1);
       return Math.max(0, Math.min(data.length - 1, rawIndex));
     },
     [data.length],
@@ -46,6 +47,15 @@ export default function SurahCarousel({ data, onSelect, initialScrollIndex = 0 }
     },
     [data, onSelect],
   );
+
+  const scrollToCenteredIndex = useCallback((index: number, animated = true) => {
+    if (!flatListRef.current) return;
+    flatListRef.current.scrollToIndex({
+      index,
+      animated,
+      viewPosition: 0.5,
+    });
+  }, []);
 
   // Handle scroll to determine active index
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -69,14 +79,10 @@ export default function SurahCarousel({ data, onSelect, initialScrollIndex = 0 }
     if (flatListRef.current) {
       // We use a timeout to ensure layout is measured
       setTimeout(() => {
-        flatListRef.current?.scrollToIndex({
-          index: initialScrollIndex,
-          animated: false,
-          viewPosition: 0.5,
-        });
+        scrollToCenteredIndex(initialScrollIndex, false);
       }, 100);
     }
-  }, [data, initialScrollIndex]);
+  }, [data, initialScrollIndex, scrollToCenteredIndex]);
 
   const getItemLayout = (_: any, index: number) => ({
     length: ITEM_WIDTH,
@@ -113,7 +119,11 @@ export default function SurahCarousel({ data, onSelect, initialScrollIndex = 0 }
 
     return (
       <Pressable
-        onPress={() => selectIndex(index, { force: true })}
+        onPress={() => {
+          setActiveIndex(index);
+          scrollToCenteredIndex(index);
+          selectIndex(index, { force: true });
+        }}
         style={{
           width: ITEM_WIDTH,
           alignItems: "center",

@@ -21,7 +21,9 @@ import { Gesture } from "react-native-gesture-handler";
 import Animated, {
   runOnJS,
   useAnimatedStyle,
+  useDerivedValue,
   useSharedValue,
+  withTiming,
 } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -68,6 +70,9 @@ const MINI_SCALE = 0.85;
 const MINI_TRIGGER_SCALE = 0.7;
 const MIN_PINCH_SCALE = 0.5;
 const MAX_PINCH_SCALE = 3;
+const DOUBLE_TAP_WINDOW_MS = 180;
+const DOUBLE_TAP_MAX_DISTANCE = 12;
+const DOUBLE_TAP_MAX_DURATION = 120;
 const PREFETCH_WINDOW = 3;
 const BACKGROUND_PREFETCH_CHUNK_SIZE = 1;
 const BACKGROUND_PREFETCH_STAGGER_MS = 24;
@@ -114,10 +119,15 @@ export default function SurahScreen() {
   const isLandscape = windowDimensions.width > windowDimensions.height;
 
   const pinchScale = useSharedValue(1);
-  const pageScaleValue = useSharedValue(NORMAL_SCALE);
+  const baseScaleValue = useSharedValue(NORMAL_SCALE);
+  const miniModeValue = useSharedValue(0);
+  const lastTapTimestamp = useSharedValue(0);
+  const markerMaskProgress = useDerivedValue(() =>
+    withTiming(miniModeValue.value ? 0 : 1, { duration: 160 }),
+  );
 
-  const toggleMiniMode = useCallback(() => {
-    setIsMini((prev) => !prev);
+  const setMiniMode = useCallback((next: boolean) => {
+    setIsMini(next);
   }, []);
 
   useEffect(() => {
@@ -234,20 +244,20 @@ export default function SurahScreen() {
     if (!isLandscape) return;
     pinchScale.value = 1;
     if (isMini) {
+      miniModeValue.value = 0;
       setIsMini(false);
     }
-  }, [isLandscape, isMini, pinchScale]);
+  }, [isLandscape, isMini, miniModeValue, pinchScale]);
 
-  const pageScale = useMemo(() => {
+  const baseScale = useMemo(() => {
     if (isLandscape) return 1;
     const pageNumber = page?.pageNumber ?? FALLBACK_PAGE_NUMBER;
-    const baseScale = pageNumber <= 2 ? FIRST_PAGES_SCALE : NORMAL_SCALE;
-    return isMini ? baseScale * MINI_SCALE : baseScale;
-  }, [isLandscape, isMini, page?.pageNumber]);
+    return pageNumber <= 2 ? FIRST_PAGES_SCALE : NORMAL_SCALE;
+  }, [isLandscape, page?.pageNumber]);
 
   useEffect(() => {
-    pageScaleValue.value = pageScale;
-  }, [pageScale, pageScaleValue]);
+    baseScaleValue.value = baseScale;
+  }, [baseScale, baseScaleValue]);
 
   useEffect(() => {
     if (!page?.pageNumber) return;
@@ -301,7 +311,8 @@ export default function SurahScreen() {
   }, [isLandscape, viewport, windowDimensions.height, windowDimensions.width]);
 
   const animatedStyle = useAnimatedStyle(() => {
-    const scale = pageScaleValue.value * pinchScale.value;
+    const miniScale = miniModeValue.value ? MINI_SCALE : 1;
+    const scale = baseScaleValue.value * miniScale * pinchScale.value;
     return {
       transform: [{ scale }],
     };
@@ -322,7 +333,8 @@ export default function SurahScreen() {
     .onEnd(() => {
       if (pinchScale.value < MINI_TRIGGER_SCALE) {
         pinchScale.value = 1;
-        runOnJS(setIsMini)(true);
+        miniModeValue.value = 1;
+        runOnJS(setMiniMode)(true);
       } else if (pinchScale.value < 1) {
         pinchScale.value = 1;
       }
@@ -330,17 +342,31 @@ export default function SurahScreen() {
 
   const doubleTap = Gesture.Tap()
     .enabled(gesturesEnabled)
-    .numberOfTaps(2)
-    .maxDelay(250)
-    .onEnd(() => {
-      runOnJS(toggleMiniMode)();
+    .maxDistance(DOUBLE_TAP_MAX_DISTANCE)
+    .maxDuration(DOUBLE_TAP_MAX_DURATION)
+    .onStart(() => {
+      const now = Date.now();
+      if (now - lastTapTimestamp.value <= DOUBLE_TAP_WINDOW_MS) {
+        lastTapTimestamp.value = 0;
+        const next = miniModeValue.value === 0;
+        miniModeValue.value = next ? 1 : 0;
+        pinchScale.value = 1;
+        runOnJS(setMiniMode)(next);
+        return;
+      }
+
+      lastTapTimestamp.value = now;
     });
 
   const renderPage = useCallback(
     ({ item }: { item: number; index: number }) => (
-      <QuranPage pageNumber={item} hideSideMarkers={!isMini} />
+      <QuranPage
+        pageNumber={item}
+        markerMaskProgress={markerMaskProgress}
+        pageWidth={pageSize.width}
+      />
     ),
-    [isMini],
+    [markerMaskProgress, pageSize.width],
   );
 
   const getFirstPageIndexForSurah = useCallback((surahNumber: number) => {

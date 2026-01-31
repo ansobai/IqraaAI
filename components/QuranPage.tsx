@@ -1,5 +1,9 @@
 import React, { memo, useEffect, useMemo, useState } from "react";
 import { View } from "react-native";
+import Animated, {
+  type SharedValue,
+  useAnimatedStyle,
+} from "react-native-reanimated";
 import { SvgXml } from "react-native-svg";
 import { loadQuranPageSvgXml } from "../utils/quranSvgRegistry";
 
@@ -9,8 +13,11 @@ const DEFAULT_HIGHLIGHT_COLOR = "#2E8B57";
 const SVG_WIDTH = 510.236;
 const SVG_HEIGHT = 729.448;
 // Crop ratios for hiding side markers (asymmetric due to SVG content)
-const MARKER_CROP_RATIO_LEFT = 0.09;  // Even pages: markers on left
+const MARKER_CROP_RATIO_LEFT = 0.9; // Even pages: markers on left
 const MARKER_CROP_RATIO_RIGHT = 0.12; // Odd pages: markers on right
+// Shift ratios to re-center content when masking (tune per parity)
+const MARKER_SHIFT_RATIO_EVEN = 0.55;
+const MARKER_SHIFT_RATIO_ODD = 0.55;
 // Special pages 1-2 have minimal markers
 const SPECIAL_CROP_RATIO = 0.01;
 
@@ -25,7 +32,7 @@ const escapeRegExp = (value: string) =>
 const adjustSvgViewBox = (
   svgXml: string,
   hideSideMarkers: boolean,
-  pageNumber: number
+  pageNumber: number,
 ): string => {
   const isSpecialPage = pageNumber === 1 || pageNumber === 2;
   const isEvenPage = pageNumber % 2 === 0;
@@ -36,12 +43,16 @@ const adjustSvgViewBox = (
     viewBox = `0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`;
   } else if (isEvenPage) {
     // Even page: markers on left, crop from left
-    const cropRatio = isSpecialPage ? SPECIAL_CROP_RATIO : MARKER_CROP_RATIO_LEFT;
+    const cropRatio = isSpecialPage
+      ? SPECIAL_CROP_RATIO
+      : MARKER_CROP_RATIO_LEFT;
     const cropWidth = SVG_WIDTH * cropRatio;
     viewBox = `${cropWidth} 0 ${SVG_WIDTH - cropWidth} ${SVG_HEIGHT}`;
   } else {
     // Odd page: markers on right, crop from right
-    const cropRatio = isSpecialPage ? SPECIAL_CROP_RATIO : MARKER_CROP_RATIO_RIGHT;
+    const cropRatio = isSpecialPage
+      ? SPECIAL_CROP_RATIO
+      : MARKER_CROP_RATIO_RIGHT;
     const cropWidth = SVG_WIDTH * cropRatio;
     viewBox = `0 0 ${SVG_WIDTH - cropWidth} ${SVG_HEIGHT}`;
   }
@@ -50,21 +61,21 @@ const adjustSvgViewBox = (
   const withoutViewBox = svgXml.replace(/\s*viewBox="[^"]*"/i, "");
   return withoutViewBox.replace(
     /<svg\b([^>]*)>/i,
-    `<svg$1 viewBox="${viewBox}">`
+    `<svg$1 viewBox="${viewBox}">`,
   );
 };
 
 const highlightSvgXml = (
   svgXml: string,
   highlightedVerseId: string,
-  highlightColor: string
+  highlightColor: string,
 ): string => {
   if (!highlightedVerseId) return svgXml;
 
   const escapedId = escapeRegExp(highlightedVerseId);
   const tagRegex = new RegExp(
     `<[^>]*\\s(?:id|data-verse-id)="${escapedId}"[^>]*\\/?>`,
-    "gi"
+    "gi",
   );
 
   return svgXml.replace(tagRegex, (tag) => {
@@ -72,7 +83,10 @@ const highlightSvgXml = (
       return tag.replace(/\sfill="[^"]*"/i, ` fill="${highlightColor}"`);
     }
 
-    return tag.replace(new RegExp("/?>$"), (ending) => ` fill="${highlightColor}"${ending}`);
+    return tag.replace(
+      new RegExp("/?>$"),
+      (ending) => ` fill="${highlightColor}"${ending}`,
+    );
   });
 };
 
@@ -82,6 +96,8 @@ export interface QuranPageProps {
   highlightColor?: string;
   shouldRender?: boolean;
   hideSideMarkers?: boolean;
+  markerMaskProgress?: SharedValue<number>;
+  pageWidth?: number;
 }
 
 function QuranPage({
@@ -90,6 +106,8 @@ function QuranPage({
   highlightColor = DEFAULT_HIGHLIGHT_COLOR,
   shouldRender = true,
   hideSideMarkers = false,
+  markerMaskProgress,
+  pageWidth,
 }: QuranPageProps) {
   const [svgXml, setSvgXml] = useState<string | null>(null);
 
@@ -115,12 +133,54 @@ function QuranPage({
     };
   }, [pageNumber, shouldRender]);
 
+  const shouldCropMarkers = hideSideMarkers && !markerMaskProgress;
+
   const renderedXml = useMemo(() => {
     if (!svgXml) return null;
-    const withViewBox = adjustSvgViewBox(svgXml, hideSideMarkers, pageNumber);
+    const withViewBox = adjustSvgViewBox(svgXml, shouldCropMarkers, pageNumber);
     if (!highlightedVerseId) return withViewBox;
     return highlightSvgXml(withViewBox, highlightedVerseId, highlightColor);
-  }, [svgXml, hideSideMarkers, pageNumber, highlightedVerseId, highlightColor]);
+  }, [
+    svgXml,
+    shouldCropMarkers,
+    pageNumber,
+    highlightedVerseId,
+    highlightColor,
+  ]);
+
+  const isSpecialPage = pageNumber === 1 || pageNumber === 2;
+  const isEvenPage = pageNumber % 2 === 0;
+  const maskRatio = isSpecialPage
+    ? SPECIAL_CROP_RATIO
+    : isEvenPage
+      ? 1 - MARKER_CROP_RATIO_LEFT
+      : MARKER_CROP_RATIO_RIGHT;
+  const contentWidth = pageWidth ?? SVG_WIDTH;
+  const maskWidth = contentWidth * maskRatio;
+  const maskSideStyle = isEvenPage ? { left: 0 } : { right: 0 };
+  const shouldShowMask = Boolean(markerMaskProgress);
+
+  const markerMaskStyle = useAnimatedStyle(() => {
+    const progress = markerMaskProgress ? markerMaskProgress.value : 0;
+    return {
+      opacity: progress,
+    };
+  }, [markerMaskProgress]);
+
+  const contentShiftStyle = useAnimatedStyle(() => {
+    if (!markerMaskProgress) {
+      return { transform: [{ translateX: 0 }] };
+    }
+    const progress = markerMaskProgress.value;
+    const direction = isEvenPage ? -1 : 1;
+    const evenShift = contentWidth * maskRatio * MARKER_SHIFT_RATIO_EVEN;
+    const oddShift = contentWidth * maskRatio * MARKER_SHIFT_RATIO_ODD;
+    const shiftBase = isEvenPage ? evenShift : oddShift;
+    const shift = shiftBase * progress * direction - 2;
+    return {
+      transform: [{ translateX: shift }],
+    };
+  }, [isEvenPage, maskRatio, markerMaskProgress, contentWidth]);
 
   if (!renderedXml) {
     return <View className="flex-1 bg-[#FFFFFF]" />;
@@ -128,12 +188,32 @@ function QuranPage({
 
   return (
     <View className="flex-1 bg-[#FFFFFF]">
-      <SvgXml
-        xml={renderedXml}
-        width="100%"
-        height="100%"
-        preserveAspectRatio="xMidYMid meet"
-      />
+      <View className="flex-1">
+        <Animated.View style={[{ flex: 1 }, contentShiftStyle]}>
+          <SvgXml
+            xml={renderedXml}
+            width="100%"
+            height="100%"
+            preserveAspectRatio="xMidYMid meet"
+          />
+        </Animated.View>
+        {shouldShowMask ? (
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              {
+                position: "absolute",
+                top: 0,
+                bottom: 0,
+                width: maskWidth,
+                backgroundColor: "#FFFFFF",
+              },
+              maskSideStyle,
+              markerMaskStyle,
+            ]}
+          />
+        ) : null}
+      </View>
     </View>
   );
 }

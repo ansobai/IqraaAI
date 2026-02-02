@@ -1,6 +1,7 @@
 // app/(surahs)/[surahId].tsx
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Asset } from "expo-asset";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import React, {
   useCallback,
@@ -30,6 +31,7 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
+import { SvgXml } from "react-native-svg";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import QuranPage from "../../components/QuranPage";
@@ -66,7 +68,7 @@ const SURAH_ITEMS = ARABIC_SURAHS.map((name, id) => ({ id, name })).filter(
 );
 
 const PAGE_ASPECT_RATIO = 729.448 / 510.236;
-const PAGE_HORIZONTAL_PADDING = 8;
+const PAGE_HORIZONTAL_PADDING = 2;
 const PAGE_TOP_PADDING = 0;
 const PAGE_BOTTOM_PADDING = 0;
 const LANDSCAPE_HORIZONTAL_PADDING = 0;
@@ -85,6 +87,22 @@ const PREFETCH_WINDOW = 3;
 const BACKGROUND_PREFETCH_CHUNK_SIZE = 1;
 const BACKGROUND_PREFETCH_STAGGER_MS = 24;
 const BACKGROUND_PREFETCH_DELAY_MS = 400;
+const BOOKMARK_ICON = require("../../assets/images/bookmark-icon.svg");
+const MOON_ICON = require("../../assets/images/moon-icon.svg");
+
+const loadSvgAssetXml = async (moduleId: number): Promise<string | null> => {
+  try {
+    const asset = Asset.fromModule(moduleId);
+    await asset.downloadAsync();
+    const uri = asset.localUri ?? asset.uri;
+    if (!uri) return null;
+    const response = await fetch(uri);
+    return await response.text();
+  } catch (error) {
+    console.error("Failed to load SVG asset:", error);
+    return null;
+  }
+};
 
 const getNearbyPages = (pageNumber: number, windowSize: number) =>
   Array.from(
@@ -127,6 +145,8 @@ export default function SurahScreen() {
   );
   const backgroundPrefetchCancelRef = useRef<(() => void) | null>(null);
   const [isMini, setIsMini] = useState(false);
+  const [bookmarkIconXml, setBookmarkIconXml] = useState<string | null>(null);
+  const [moonIconXml, setMoonIconXml] = useState<string | null>(null);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const windowDimensions = useWindowDimensions();
   const isLandscape = windowDimensions.width > windowDimensions.height;
@@ -136,8 +156,8 @@ export default function SurahScreen() {
   const baseScaleValue = useSharedValue(NORMAL_SCALE);
   const miniModeValue = useSharedValue(0);
   const lastTapTimestamp = useSharedValue(0);
-  const markerMaskProgress = useDerivedValue(() =>
-    withTiming(miniModeValue.value ? 0 : 1, { duration: 160 }),
+  const markerMaskProgress = useDerivedValue<number>(() =>
+    withTiming(Number(miniModeValue.value ? 0 : 1), { duration: 160 }),
   );
 
   const setMiniMode = useCallback((next: boolean) => {
@@ -218,6 +238,25 @@ export default function SurahScreen() {
     const nearbyPages = getNearbyPages(pageNumber, PREFETCH_WINDOW);
     prefetchQuranPageSvgs(nearbyPages);
   }, [pageIndex]);
+
+  useEffect(() => {
+    let isActive = true;
+    const loadIcons = async () => {
+      const [bookmarkXml, moonXml] = await Promise.all([
+        loadSvgAssetXml(BOOKMARK_ICON),
+        loadSvgAssetXml(MOON_ICON),
+      ]);
+      if (!isActive) return;
+      setBookmarkIconXml(bookmarkXml);
+      setMoonIconXml(moonXml);
+    };
+
+    loadIcons();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!didRestorePage || backgroundPrefetchCancelRef.current) return;
@@ -396,7 +435,7 @@ export default function SurahScreen() {
     });
 
   const renderPage = useCallback(
-    ({ item }: { item: number; index: number }) => (
+    ({ item }: { item: number }) => (
       <QuranPage
         pageNumber={item}
         markerMaskProgress={markerMaskProgress}
@@ -480,11 +519,18 @@ export default function SurahScreen() {
 
       {isMini ? (
         <View
-          className="pt-12 pb-2"
+          className="pt-12 pb-1"
           pointerEvents="box-none"
-          style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 5 }}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            zIndex: 5,
+          }}
         >
-          <View className="px-5 mb-4">
+          <View className="px-5 mb-2">
             <View className="flex-row-reverse bg-[#F0EBE0] rounded-2xl px-4 py-2 items-center gap-2">
               <Ionicons name="search" size={20} color="#999" />
               <TextInput
@@ -499,7 +545,7 @@ export default function SurahScreen() {
 
           {query.length > 0 ? (
             <View
-              className="mb-4 w-full bg-white rounded-2xl shadow-lg border border-[#E8E1D1] overflow-hidden"
+              className="mb-2 w-full bg-white rounded-2xl shadow-lg border border-[#E8E1D1] overflow-hidden"
               style={{ maxHeight: windowDimensions.height * 0.55 }}
             >
               {isSearching ? (
@@ -515,8 +561,12 @@ export default function SurahScreen() {
               ) : (
                 <FlatList
                   data={results}
-                  keyExtractor={(item, index) => index.toString()}
-                  contentContainerClassName="py-2"
+                  keyExtractor={(item) =>
+                    item.type === "surah"
+                      ? `surah-${item.id}`
+                      : `verse-${item.surahId}-${item.verseNumber}-${item.pageNumber}`
+                  }
+                  contentContainerStyle={{ paddingVertical: 8 }}
                   keyboardShouldPersistTaps="handled"
                   renderItem={({ item }) => {
                     const rowClassName =
@@ -528,37 +578,37 @@ export default function SurahScreen() {
                         onPress={() => handleSearchResultPress(item)}
                         className={rowClassName}
                       >
-                      {item.type === "surah" ? (
-                        <View className="flex-row-reverse items-center gap-3">
-                          <View className="w-8 h-8 rounded-full bg-[#E8E1D1] items-center justify-center">
-                            <Text className="text-[#8F7E5E] font-bold text-base">
-                              {toArabicNumber(item.id)}
+                        {item.type === "surah" ? (
+                          <View className="flex-row-reverse items-center gap-3">
+                            <View className="w-8 h-8 rounded-full bg-[#E8E1D1] items-center justify-center">
+                              <Text className="text-[#8F7E5E] font-bold text-base">
+                                {toArabicNumber(item.id)}
+                              </Text>
+                            </View>
+                            <Text className="text-2xl text-[#1F1F1F] font-uthmanic font-bold">
+                              سورة {item.name}
                             </Text>
                           </View>
-                          <Text className="text-2xl text-[#1F1F1F] font-uthmanic font-bold">
-                            سورة {item.name}
-                          </Text>
-                        </View>
-                      ) : (
-                        <View className="flex-1">
-                          <View className="flex-row-reverse items-center gap-1 mb-0">
-                            <Text className="text-xl text-[#2E8B57] font-bold font-uthmanic">
-                              سورة {item.surahName}
-                            </Text>
-                            <Text className="text-2xl text-[#999] font-uthmanic">
-                              {toArabicNumber(Number(item.verseNumber))}
+                        ) : (
+                          <View className="flex-1">
+                            <View className="flex-row-reverse items-center gap-1 mb-0">
+                              <Text className="text-xl text-[#2E8B57] font-bold font-uthmanic">
+                                سورة {item.surahName}
+                              </Text>
+                              <Text className="text-2xl text-[#999] font-uthmanic">
+                                {toArabicNumber(Number(item.verseNumber))}
+                              </Text>
+                            </View>
+                            <Text
+                              className="text-xl text-[#1F1F1F] font-uthmanic text-right"
+                              numberOfLines={1}
+                              ellipsizeMode="clip"
+                            >
+                              {item.text}
                             </Text>
                           </View>
-                          <Text
-                            className="text-xl text-[#1F1F1F] font-uthmanic text-right"
-                            numberOfLines={1}
-                            ellipsizeMode="clip"
-                          >
-                            {item.text}
-                          </Text>
-                        </View>
-                      )}
-                      <Ionicons name="chevron-back" size={16} color="#CCC" />
+                        )}
+                        <Ionicons name="chevron-back" size={16} color="#CCC" />
                       </Pressable>
                     );
                   }}
@@ -576,6 +626,26 @@ export default function SurahScreen() {
               />
             </View>
           ) : null}
+
+          <View
+            pointerEvents="none"
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 48,
+              alignItems: "center",
+            }}
+          >
+            <View className="flex-row items-center justify-center gap-10">
+              {bookmarkIconXml ? (
+                <SvgXml xml={bookmarkIconXml} width={24} height={24} />
+              ) : null}
+              {moonIconXml ? (
+                <SvgXml xml={moonIconXml} width={26} height={26} />
+              ) : null}
+            </View>
+          </View>
         </View>
       ) : null}
 

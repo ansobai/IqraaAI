@@ -19,7 +19,7 @@ module.exports = {
   theme: {
     extend: {
       fontFamily: {
-        uthmanic: ["UthmanicHafs"],
+        uthmanic: ["Madani"],
         madani: ["Madani"],
         scheherazade: ["Scheherazade"],
         amiri: ["Amiri"],

@@ -8,6 +8,7 @@ import { SvgXml } from "react-native-svg";
 import { loadQuranPageSvgXml } from "../utils/quranSvgRegistry";
 
 const DEFAULT_HIGHLIGHT_COLOR = "#2E8B57";
+const PAGE_BACKGROUND_COLOR = "#FFFAF2";
 
 // SVG dimensions (all pages have the same size)
 const SVG_WIDTH = 510.236;
@@ -96,7 +97,7 @@ export interface QuranPageProps {
   highlightColor?: string;
   shouldRender?: boolean;
   hideSideMarkers?: boolean;
-  markerMaskProgress?: SharedValue<number>;
+  markerMaskProgress?: SharedValue<number> | Readonly<SharedValue<number>>;
   pageWidth?: number;
 }
 
@@ -183,11 +184,19 @@ function QuranPage({
   }, [isEvenPage, maskRatio, markerMaskProgress, contentWidth]);
 
   if (!renderedXml) {
-    return <View className="flex-1 bg-[#FFFFFF]" />;
+    return (
+      <View
+        className="flex-1"
+        style={{ backgroundColor: PAGE_BACKGROUND_COLOR }}
+      />
+    );
   }
 
   return (
-    <View className="flex-1 bg-[#FFFFFF]">
+    <View
+      className="flex-1"
+      style={{ backgroundColor: PAGE_BACKGROUND_COLOR }}
+    >
       <View className="flex-1">
         <Animated.View style={[{ flex: 1 }, contentShiftStyle]}>
           <SvgXml
@@ -206,7 +215,7 @@ function QuranPage({
                 top: 0,
                 bottom: 0,
                 width: maskWidth,
-                backgroundColor: "#FFFFFF",
+                backgroundColor: PAGE_BACKGROUND_COLOR,
               },
               maskSideStyle,
               markerMaskStyle,

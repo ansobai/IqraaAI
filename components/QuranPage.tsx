@@ -19,6 +19,9 @@ const MARKER_CROP_RATIO_RIGHT = 0.12; // Odd pages: markers on right
 // Shift ratios to re-center content when masking (tune per parity)
 const MARKER_SHIFT_RATIO_EVEN = 0.55;
 const MARKER_SHIFT_RATIO_ODD = 0.55;
+// In mini mode we keep markers visible, so apply a smaller centering shift.
+const MINI_SHIFT_RATIO_EVEN = 0.4;
+const MINI_SHIFT_RATIO_ODD = 0.4;
 // Special pages 1-2 have minimal markers
 const SPECIAL_CROP_RATIO = 0.01;
 
@@ -177,7 +180,11 @@ function QuranPage({
     const evenShift = contentWidth * maskRatio * MARKER_SHIFT_RATIO_EVEN;
     const oddShift = contentWidth * maskRatio * MARKER_SHIFT_RATIO_ODD;
     const shiftBase = isEvenPage ? evenShift : oddShift;
-    const shift = shiftBase * progress * direction - 2;
+    const evenMiniShift = contentWidth * maskRatio * MINI_SHIFT_RATIO_EVEN;
+    const oddMiniShift = contentWidth * maskRatio * MINI_SHIFT_RATIO_ODD;
+    const miniShift = isEvenPage ? evenMiniShift : oddMiniShift;
+    const interpolatedShift = miniShift + (shiftBase - miniShift) * progress;
+    const shift = interpolatedShift * direction - 2 * progress;
     return {
       transform: [{ translateX: shift }],
     };

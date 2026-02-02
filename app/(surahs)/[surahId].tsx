@@ -13,6 +13,7 @@ import React, {
 import {
   ActivityIndicator,
   FlatList,
+  Image,
   InteractionManager,
   Keyboard,
   LayoutChangeEvent,
@@ -90,6 +91,7 @@ const BACKGROUND_PREFETCH_STAGGER_MS = 24;
 const BACKGROUND_PREFETCH_DELAY_MS = 400;
 const BOOKMARK_ICON = require("../../assets/images/bookmark-icon.svg");
 const MOON_ICON = require("../../assets/images/moon-icon.svg");
+const HIZB_ICON = require("../../assets/images/hizb_shape.png");
 
 const loadSvgAssetXml = async (moduleId: number): Promise<string | null> => {
   try {
@@ -159,7 +161,7 @@ export default function SurahScreen() {
   const miniModeValue = useSharedValue(0);
   const lastTapTimestamp = useSharedValue(0);
   const markerMaskProgress = useDerivedValue<number>(() =>
-    withTiming(Number(miniModeValue.value ? 0 : 1), { duration: 160 }),
+    withTiming(1, { duration: 160 }),
   );
 
   const setMiniMode = useCallback((next: boolean) => {
@@ -231,7 +233,7 @@ export default function SurahScreen() {
     return () => {
       isActive = false;
     };
-  }, []);
+  }, [forceFirstPage, id, initialIndex, pageParam]);
 
   useEffect(() => {
     const pageNumber = PAGES[pageIndex]?.pageNumber;
@@ -521,13 +523,39 @@ export default function SurahScreen() {
     ? LANDSCAPE_BOTTOM_PADDING
     : PAGE_BOTTOM_PADDING;
 
+  const pageContent = (
+    <Animated.View
+      style={[
+        {
+          width: pageSize.width,
+          height: pageSize.height,
+          alignSelf: "center",
+          overflow: "visible",
+        },
+        animatedStyle,
+      ]}
+    >
+      {pageSize.width > 0 && pageSize.height > 0 ? (
+        <QuranPager
+          data={PAGE_NUMBERS}
+          initialIndex={pageIndex}
+          onIndexChange={setPageIndex}
+          renderItem={renderPage}
+          scrollEnabled
+          pageWidth={pageSize.width}
+          simultaneousGestures={[pinch, doubleTap]}
+        />
+      ) : null}
+    </Animated.View>
+  );
+
   return (
     <SafeAreaView className="flex-1 bg-[#FFFDF5]" edges={["top", "bottom"]}>
       <Stack.Screen options={{ headerShown: false }} />
 
       {isMini ? (
         <View
-          className="pt-12 pb-1"
+          className="pt-10 pb-1"
           pointerEvents="box-none"
           style={{
             position: "absolute",
@@ -538,12 +566,13 @@ export default function SurahScreen() {
             zIndex: 5,
           }}
         >
-          <View className="px-5 mb-2">
-            <View className="flex-row-reverse bg-[#F0EBE0] rounded-2xl px-4 py-2 items-center gap-2">
-              <Ionicons name="search" size={20} color="#999" />
+          <View className="px-5 mb-1">
+            <View className="flex-row-reverse bg-[#F0EBE0] rounded-full px-4 py-2 items-center gap-2 border border-[#E8E1D1]">
+              <Ionicons name="ellipsis-horizontal" size={18} color="#8F7E5E" />
+              <Ionicons name="search" size={18} color="#8F7E5E" />
               <TextInput
                 placeholder="بحث في السور..."
-                placeholderTextColor="#999"
+                placeholderTextColor="#8F7E5E"
                 className="flex-1 text-right text-base text-[#1F1F1F] font-uthmanic"
                 value={query}
                 onChangeText={setQuery}
@@ -626,7 +655,7 @@ export default function SurahScreen() {
           ) : null}
 
           {query.length === 0 ? (
-            <View className="h-20">
+            <View className="h-20 mt-1">
               <SurahCarousel
                 data={SURAH_ITEMS}
                 onSelect={handleSelectSurah}
@@ -641,23 +670,43 @@ export default function SurahScreen() {
               position: "absolute",
               left: 0,
               right: 0,
-              bottom: 48,
-              alignItems: "center",
+              bottom: 0,
             }}
           >
-            <View className="flex-row items-center justify-center gap-14">
-              {bookmarkIconXml ? (
-                <Pressable
-                  onPress={handleOpenBookmarkModal}
-                  accessibilityRole="button"
-                  accessibilityLabel="Open bookmarks"
-                >
-                  <SvgXml xml={bookmarkIconXml} width={32} height={32} />
-                </Pressable>
-              ) : null}
-              {moonIconXml ? (
-                <SvgXml xml={moonIconXml} width={32} height={32} />
-              ) : null}
+            <View className="items-center mb-2">
+              <Text className="text-[#8F7E5E] font-uthmanic text-base">
+                {toArabicNumber(page?.pageNumber ?? FALLBACK_PAGE_NUMBER)}
+              </Text>
+            </View>
+            <View
+              className="mx-6 mb-3 rounded-t-3xl bg-[#F0EBE0] border border-[#E8E1D1] px-10 py-3"
+              style={{
+                shadowColor: "#000",
+                shadowOpacity: 0.08,
+                shadowRadius: 12,
+                shadowOffset: { width: 0, height: 6 },
+                elevation: 4,
+              }}
+            >
+              <View className="flex-row items-center justify-center gap-12">
+                {bookmarkIconXml ? (
+                  <Pressable
+                    onPress={handleOpenBookmarkModal}
+                    accessibilityRole="button"
+                    accessibilityLabel="Open bookmarks"
+                  >
+                    <SvgXml xml={bookmarkIconXml} width={28} height={28} />
+                  </Pressable>
+                ) : null}
+                <Image
+                  source={HIZB_ICON}
+                  style={{ width: 28, height: 28 }}
+                  resizeMode="contain"
+                />
+                {moonIconXml ? (
+                  <SvgXml xml={moonIconXml} width={28} height={28} />
+                ) : null}
+              </View>
             </View>
           </View>
         </View>
@@ -706,29 +755,26 @@ export default function SurahScreen() {
               paddingBottom: bottomPadding,
             }}
           >
-            <Animated.View
-              style={[
-                {
-                  width: pageSize.width,
-                  height: pageSize.height,
-                  alignSelf: "center",
-                  overflow: "visible",
-                },
-                animatedStyle,
-              ]}
-            >
-              {pageSize.width > 0 && pageSize.height > 0 ? (
-                <QuranPager
-                  data={PAGE_NUMBERS}
-                  initialIndex={pageIndex}
-                  onIndexChange={setPageIndex}
-                  renderItem={renderPage}
-                  scrollEnabled
-                  pageWidth={pageSize.width}
-                  simultaneousGestures={[pinch, doubleTap]}
-                />
-              ) : null}
-            </Animated.View>
+            {isMini ? (
+              <View
+                style={{
+                  padding: 8,
+                  backgroundColor: "#FFF7E8",
+                  borderRadius: 18,
+                  borderWidth: 1,
+                  borderColor: "#E8E1D1",
+                  shadowColor: "#000",
+                  shadowOpacity: 0.08,
+                  shadowRadius: 10,
+                  shadowOffset: { width: 0, height: 6 },
+                  elevation: 4,
+                }}
+              >
+                {pageContent}
+              </View>
+            ) : (
+              pageContent
+            )}
           </View>
         )}
       </View>

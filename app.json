@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "my-app",
-    "slug": "my-app",
+    "name": "IqraaAI",
+    "slug": "iqraa-ai",
     "version": "1.0.0",
     "orientation": "default",
     "icon": "./assets/images/icon.jpg",
@@ -9,9 +9,13 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.ansobai.iqraaai",
+      "buildNumber": "1"
     },
     "android": {
+      "package": "com.ansobai.iqraaai",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/icon.jpg",
@@ -47,6 +51,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "cc605bd4-b44b-4357-8fd9-74275a88b708"
+      }
     }
   }
 }

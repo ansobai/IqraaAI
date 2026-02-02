@@ -36,6 +36,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import QuranPage from "../../components/QuranPage";
 import QuranPager from "../../components/QuranPager";
+import BookmarkModal from "../../components/BookmarkModal";
 import SurahCarousel from "../../components/SurahCarousel";
 import { LAST_READ_PAGE_KEY } from "../../constants/storage";
 import { ARABIC_SURAHS } from "../../constants/surahNames";
@@ -147,6 +148,7 @@ export default function SurahScreen() {
   const [isMini, setIsMini] = useState(false);
   const [bookmarkIconXml, setBookmarkIconXml] = useState<string | null>(null);
   const [moonIconXml, setMoonIconXml] = useState<string | null>(null);
+  const [isBookmarkModalOpen, setIsBookmarkModalOpen] = useState(false);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const windowDimensions = useWindowDimensions();
   const isLandscape = windowDimensions.width > windowDimensions.height;
@@ -505,6 +507,12 @@ export default function SurahScreen() {
   );
 
   const carouselIndex = Math.max(0, Math.min(SURAH_ITEMS.length - 1, id - 1));
+  const handleOpenBookmarkModal = useCallback(() => {
+    setIsBookmarkModalOpen(true);
+  }, []);
+  const handleCloseBookmarkModal = useCallback(() => {
+    setIsBookmarkModalOpen(false);
+  }, []);
   const horizontalPadding = isLandscape
     ? LANDSCAPE_HORIZONTAL_PADDING
     : PAGE_HORIZONTAL_PADDING;
@@ -628,7 +636,7 @@ export default function SurahScreen() {
           ) : null}
 
           <View
-            pointerEvents="none"
+            pointerEvents="box-none"
             style={{
               position: "absolute",
               left: 0,
@@ -637,12 +645,18 @@ export default function SurahScreen() {
               alignItems: "center",
             }}
           >
-            <View className="flex-row items-center justify-center gap-10">
+            <View className="flex-row items-center justify-center gap-14">
               {bookmarkIconXml ? (
-                <SvgXml xml={bookmarkIconXml} width={24} height={24} />
+                <Pressable
+                  onPress={handleOpenBookmarkModal}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open bookmarks"
+                >
+                  <SvgXml xml={bookmarkIconXml} width={32} height={32} />
+                </Pressable>
               ) : null}
               {moonIconXml ? (
-                <SvgXml xml={moonIconXml} width={26} height={26} />
+                <SvgXml xml={moonIconXml} width={32} height={32} />
               ) : null}
             </View>
           </View>
@@ -718,6 +732,11 @@ export default function SurahScreen() {
           </View>
         )}
       </View>
+      <BookmarkModal
+        visible={isBookmarkModalOpen}
+        onClose={handleCloseBookmarkModal}
+        currentPageNumber={page?.pageNumber}
+      />
     </SafeAreaView>
   );
 }

@@ -5,7 +5,10 @@ import Animated, {
   useAnimatedStyle,
 } from "react-native-reanimated";
 import { SvgXml } from "react-native-svg";
-import { loadQuranPageSvgXml } from "../utils/quranSvgRegistry";
+import {
+  getCachedQuranPageSvgXml,
+  loadQuranPageSvgXml,
+} from "../utils/quranSvgRegistry";
 
 const DEFAULT_HIGHLIGHT_COLOR = "#2E8B57";
 const PAGE_BACKGROUND_COLOR = "#FFFAF2";
@@ -113,7 +116,10 @@ function QuranPage({
   markerMaskProgress,
   pageWidth,
 }: QuranPageProps) {
-  const [svgXml, setSvgXml] = useState<string | null>(null);
+  const [svgXml, setSvgXml] = useState<string | null>(() => {
+    if (!shouldRender) return null;
+    return getCachedQuranPageSvgXml(pageNumber);
+  });
 
   useEffect(() => {
     let isActive = true;
@@ -125,10 +131,17 @@ function QuranPage({
       };
     }
 
-    setSvgXml(null);
+    const cached = getCachedQuranPageSvgXml(pageNumber);
+    if (cached != null) {
+      setSvgXml(cached);
+    } else {
+      setSvgXml(null);
+    }
     loadQuranPageSvgXml(pageNumber).then((xml) => {
       if (isActive) {
-        setSvgXml(xml);
+        if (xml != null) {
+          setSvgXml(xml);
+        }
       }
     });
 

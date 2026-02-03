@@ -13,8 +13,6 @@ import React, {
 import {
   ActivityIndicator,
   FlatList,
-  Image,
-  InteractionManager,
   Keyboard,
   LayoutChangeEvent,
   Pressable,
@@ -49,7 +47,6 @@ import {
   type MushafPage,
 } from "../../utils/mushafData";
 import {
-  QURAN_PAGE_NUMBERS,
   prefetchQuranPageSvgs,
 } from "../../utils/quranSvgRegistry";
 import { SearchResult } from "../../utils/searchUtils";
@@ -80,18 +77,15 @@ const NORMAL_SCALE = 1.36;
 const FIRST_PAGES_SCALE = NORMAL_SCALE;
 const MINI_SCALE = 0.85;
 const MINI_TRIGGER_SCALE = 0.7;
+const MINI_ANIMATION_DURATION_MS = 160;
 const MIN_PINCH_SCALE = 0.5;
 const MAX_PINCH_SCALE = 3;
 const DOUBLE_TAP_WINDOW_MS = 180;
 const DOUBLE_TAP_MAX_DISTANCE = 12;
 const DOUBLE_TAP_MAX_DURATION = 120;
 const PREFETCH_WINDOW = 3;
-const BACKGROUND_PREFETCH_CHUNK_SIZE = 1;
-const BACKGROUND_PREFETCH_STAGGER_MS = 24;
-const BACKGROUND_PREFETCH_DELAY_MS = 400;
 const BOOKMARK_ICON = require("../../assets/images/bookmark-icon.svg");
 const MOON_ICON = require("../../assets/images/moon-icon.svg");
-const HIZB_ICON = require("../../assets/images/hizb_shape.png");
 
 const loadSvgAssetXml = async (moduleId: number): Promise<string | null> => {
   try {
@@ -142,11 +136,6 @@ export default function SurahScreen() {
 
   const [pageIndex, setPageIndex] = useState(initialIndex);
   const hasRestoredRef = useRef(false);
-  const [didRestorePage, setDidRestorePage] = useState(false);
-  const [restoredPageNumber, setRestoredPageNumber] = useState<number | null>(
-    null,
-  );
-  const backgroundPrefetchCancelRef = useRef<(() => void) | null>(null);
   const [isMini, setIsMini] = useState(false);
   const [bookmarkIconXml, setBookmarkIconXml] = useState<string | null>(null);
   const [moonIconXml, setMoonIconXml] = useState<string | null>(null);
@@ -161,7 +150,7 @@ export default function SurahScreen() {
   const miniModeValue = useSharedValue(0);
   const lastTapTimestamp = useSharedValue(0);
   const markerMaskProgress = useDerivedValue<number>(() =>
-    withTiming(1, { duration: 160 }),
+    withTiming(1, { duration: MINI_ANIMATION_DURATION_MS }),
   );
 
   const setMiniMode = useCallback((next: boolean) => {
@@ -183,7 +172,6 @@ export default function SurahScreen() {
           );
           if (targetIndex !== -1) {
             setPageIndex(targetIndex);
-            setRestoredPageNumber(targetPage);
             return;
           }
         }
@@ -191,9 +179,6 @@ export default function SurahScreen() {
         const savedNumber = saved ? Number(saved) : NaN;
         if (forceFirstPage) {
           setPageIndex(initialIndex);
-          setRestoredPageNumber(
-            PAGES[initialIndex]?.pageNumber ?? FALLBACK_PAGE_NUMBER,
-          );
           return;
         }
 
@@ -206,24 +191,16 @@ export default function SurahScreen() {
 
         if (savedIndex >= 0 && savedSurahId === id) {
           setPageIndex(savedIndex);
-          setRestoredPageNumber(savedNumber);
         } else {
           setPageIndex(initialIndex);
-          setRestoredPageNumber(
-            PAGES[initialIndex]?.pageNumber ?? FALLBACK_PAGE_NUMBER,
-          );
         }
       } catch {
         if (isActive) {
           setPageIndex(initialIndex);
-          setRestoredPageNumber(
-            PAGES[initialIndex]?.pageNumber ?? FALLBACK_PAGE_NUMBER,
-          );
         }
       } finally {
         if (isActive) {
           hasRestoredRef.current = true;
-          setDidRestorePage(true);
         }
       }
     };
@@ -262,39 +239,6 @@ export default function SurahScreen() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!didRestorePage || backgroundPrefetchCancelRef.current) return;
-
-    const pageNumber = restoredPageNumber ?? FALLBACK_PAGE_NUMBER;
-
-    const nearbySet = new Set(getNearbyPages(pageNumber, PREFETCH_WINDOW));
-    const remainingPages = QURAN_PAGE_NUMBERS.filter(
-      (num) => !nearbySet.has(num),
-    );
-
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    const interactionHandle = InteractionManager.runAfterInteractions(() => {
-      timeoutId = setTimeout(() => {
-        backgroundPrefetchCancelRef.current = prefetchQuranPageSvgs(
-          remainingPages,
-          {
-            chunkSize: BACKGROUND_PREFETCH_CHUNK_SIZE,
-            staggerMs: BACKGROUND_PREFETCH_STAGGER_MS,
-          },
-        );
-      }, BACKGROUND_PREFETCH_DELAY_MS);
-    });
-
-    return () => {
-      interactionHandle?.cancel?.();
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      backgroundPrefetchCancelRef.current?.();
-      backgroundPrefetchCancelRef.current = null;
-    };
-  }, [didRestorePage, restoredPageNumber]);
-
   // Reset index if surahId or page param changes after initial restore
   useEffect(() => {
     if (!hasRestoredRef.current) return;
@@ -304,7 +248,6 @@ export default function SurahScreen() {
       const targetIndex = PAGES.findIndex((p) => p.pageNumber === targetPage);
       if (targetIndex !== -1) {
         setPageIndex(targetIndex);
-        setRestoredPageNumber(targetPage);
         return;
       }
     }
@@ -391,7 +334,7 @@ export default function SurahScreen() {
   }, [isLandscape, viewport, windowDimensions.height, windowDimensions.width]);
 
   const animatedStyle = useAnimatedStyle(() => {
-    const miniScale = miniModeValue.value ? MINI_SCALE : 1;
+    const miniScale = 1 + (MINI_SCALE - 1) * miniModeValue.value;
     const scale = baseScaleValue.value * miniScale * pinchScale.value;
     return {
       transform: [{ scale }],
@@ -413,7 +356,9 @@ export default function SurahScreen() {
     .onEnd(() => {
       if (pinchScale.value < MINI_TRIGGER_SCALE) {
         pinchScale.value = 1;
-        miniModeValue.value = 1;
+        miniModeValue.value = withTiming(1, {
+          duration: MINI_ANIMATION_DURATION_MS,
+        });
         runOnJS(setMiniMode)(true);
       } else if (pinchScale.value < 1) {
         pinchScale.value = 1;
@@ -428,10 +373,24 @@ export default function SurahScreen() {
       const now = Date.now();
       if (now - lastTapTimestamp.value <= DOUBLE_TAP_WINDOW_MS) {
         lastTapTimestamp.value = 0;
-        const next = miniModeValue.value === 0;
-        miniModeValue.value = next ? 1 : 0;
+        const next = miniModeValue.value <= 0.5;
+        if (next) {
+          miniModeValue.value = withTiming(1, {
+            duration: MINI_ANIMATION_DURATION_MS,
+          });
+          runOnJS(setMiniMode)(true);
+        } else {
+          miniModeValue.value = withTiming(
+            0,
+            { duration: MINI_ANIMATION_DURATION_MS },
+            (finished) => {
+              if (finished) {
+                runOnJS(setMiniMode)(false);
+              }
+            },
+          );
+        }
         pinchScale.value = 1;
-        runOnJS(setMiniMode)(next);
         return;
       }
 
@@ -482,7 +441,6 @@ export default function SurahScreen() {
         );
         if (targetIndex !== -1) {
           setPageIndex(targetIndex);
-          setRestoredPageNumber(result.pageNumber);
         }
         router.replace({
           pathname: "/(surahs)/[surahId]",
@@ -494,7 +452,9 @@ export default function SurahScreen() {
       }
 
       if (isMini) {
-        miniModeValue.value = 0;
+        miniModeValue.value = withTiming(0, {
+          duration: MINI_ANIMATION_DURATION_MS,
+        });
         setIsMini(false);
       }
     },
@@ -504,7 +464,6 @@ export default function SurahScreen() {
       miniModeValue,
       router,
       setQuery,
-      setRestoredPageNumber,
     ],
   );
 
@@ -568,7 +527,6 @@ export default function SurahScreen() {
         >
           <View className="px-5 mb-1">
             <View className="flex-row-reverse bg-[#F0EBE0] rounded-full px-4 py-2 items-center gap-2 border border-[#E8E1D1]">
-              <Ionicons name="ellipsis-horizontal" size={18} color="#8F7E5E" />
               <Ionicons name="search" size={18} color="#8F7E5E" />
               <TextInput
                 placeholder="بحث في السور..."
@@ -673,11 +631,6 @@ export default function SurahScreen() {
               bottom: 0,
             }}
           >
-            <View className="items-center mb-2">
-              <Text className="text-[#8F7E5E] font-uthmanic text-base">
-                {toArabicNumber(page?.pageNumber ?? FALLBACK_PAGE_NUMBER)}
-              </Text>
-            </View>
             <View
               className="mx-6 mb-3 rounded-t-3xl bg-[#F0EBE0] border border-[#E8E1D1] px-10 py-3"
               style={{
@@ -698,11 +651,6 @@ export default function SurahScreen() {
                     <SvgXml xml={bookmarkIconXml} width={28} height={28} />
                   </Pressable>
                 ) : null}
-                <Image
-                  source={HIZB_ICON}
-                  style={{ width: 28, height: 28 }}
-                  resizeMode="contain"
-                />
                 {moonIconXml ? (
                   <SvgXml xml={moonIconXml} width={28} height={28} />
                 ) : null}
@@ -755,9 +703,9 @@ export default function SurahScreen() {
               paddingBottom: bottomPadding,
             }}
           >
-            {isMini ? (
-              <View
-                style={{
+            <View
+              style={[
+                isMini && {
                   padding: 8,
                   backgroundColor: "#FFF7E8",
                   borderRadius: 18,
@@ -768,13 +716,11 @@ export default function SurahScreen() {
                   shadowRadius: 10,
                   shadowOffset: { width: 0, height: 6 },
                   elevation: 4,
-                }}
-              >
-                {pageContent}
-              </View>
-            ) : (
-              pageContent
-            )}
+                },
+              ]}
+            >
+              {pageContent}
+            </View>
           </View>
         )}
       </View>
@@ -786,3 +732,5 @@ export default function SurahScreen() {
     </SafeAreaView>
   );
 }
+
+

@@ -3,6 +3,20 @@ import { QURAN_SVG_ASSET_MODULES } from "../assets/quran-svgs/pages-manifest";
 
 const PAGE_SVGS = new Map<number, string>();
 const PAGE_LOADS = new Map<number, Promise<string | null>>();
+const MAX_CACHED_SVG_PAGES = 24;
+
+const touchSvgCache = (pageNumber: number, xml: string) => {
+  if (PAGE_SVGS.has(pageNumber)) {
+    PAGE_SVGS.delete(pageNumber);
+  }
+  PAGE_SVGS.set(pageNumber, xml);
+
+  while (PAGE_SVGS.size > MAX_CACHED_SVG_PAGES) {
+    const oldestKey = PAGE_SVGS.keys().next().value as number | undefined;
+    if (oldestKey === undefined) break;
+    PAGE_SVGS.delete(oldestKey);
+  }
+};
 
 const hasAssetModule = (pageNumber: number) =>
   Boolean(QURAN_SVG_ASSET_MODULES[pageNumber]);
@@ -12,10 +26,19 @@ export const QURAN_PAGE_NUMBERS = Object.keys(QURAN_SVG_ASSET_MODULES)
   .filter((num) => Number.isFinite(num))
   .sort((a, b) => a - b);
 
+export const getCachedQuranPageSvgXml = (pageNumber: number): string | null => {
+  if (!Number.isFinite(pageNumber) || pageNumber < 1) return null;
+
+  const xml = PAGE_SVGS.get(pageNumber);
+  if (xml == null) return null;
+
+  touchSvgCache(pageNumber, xml);
+  return xml;
+};
+
 const loadSvgXml = async (pageNumber: number): Promise<string | null> => {
-  if (PAGE_SVGS.has(pageNumber)) {
-    return PAGE_SVGS.get(pageNumber) ?? null;
-  }
+  const cached = getCachedQuranPageSvgXml(pageNumber);
+  if (cached != null) return cached;
 
   if (PAGE_LOADS.has(pageNumber)) {
     return PAGE_LOADS.get(pageNumber) ?? null;
@@ -34,7 +57,7 @@ const loadSvgXml = async (pageNumber: number): Promise<string | null> => {
 
       const response = await fetch(uri);
       const xml = await response.text();
-      PAGE_SVGS.set(pageNumber, xml);
+      touchSvgCache(pageNumber, xml);
       return xml;
     } catch (error) {
       console.error(`Failed to load SVG page ${pageNumber}:`, error);

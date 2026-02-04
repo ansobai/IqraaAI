@@ -9,6 +9,9 @@ SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
+    UthmanicHafs: require("../assets/fonts/ArbFONTS-Hafs-Font-v0.09.otf"),
+    Madani: require("../assets/fonts/KFGQPC Uthmanic Script HAFS Regular.otf"),
+    Scheherazade: require("../assets/fonts/ScheherazadeNew-Regular.ttf"),
     Amiri: require("../assets/fonts/Amiri-Regular.ttf"),
   });
 
@@ -23,7 +26,7 @@ export default function RootLayout() {
   }
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView className="flex-1">
       <Stack />
     </GestureHandlerRootView>
   );

@@ -1,4 +1,5 @@
 // app/(surahs)/[surahId].tsx
+import { useAuth } from "@clerk/clerk-expo";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Asset } from "expo-asset";
@@ -109,6 +110,7 @@ const getNearbyPages = (pageNumber: number, windowSize: number) =>
   );
 
 export default function SurahScreen() {
+  const { isLoaded: isAuthLoaded, isSignedIn, signOut } = useAuth();
   const {
     surahId,
     startAt,
@@ -424,7 +426,7 @@ export default function SurahScreen() {
     (surahNumber: number) => {
       setPageIndex(getFirstPageIndexForSurah(surahNumber));
       router.replace({
-        pathname: "/(surahs)/[surahId]",
+        pathname: "/[surahId]",
         params: {
           surahId: String(surahNumber),
           startAt: "first",
@@ -449,7 +451,7 @@ export default function SurahScreen() {
           setPageIndex(targetIndex);
         }
         router.replace({
-          pathname: "/(surahs)/[surahId]",
+          pathname: "/[surahId]",
           params: {
             surahId: String(result.surahId),
             page: String(result.pageNumber),
@@ -539,17 +541,51 @@ export default function SurahScreen() {
               <Pressable
                 onPress={() => {
                   setIsMiniMenuOpen(false);
-                  router.push("/(auth)/sign-in");
+                  router.push("/(profile)/profile");
                 }}
                 className="px-4 py-4 flex-row-reverse items-center gap-3 active:bg-[#F9F9F9]"
                 accessibilityRole="button"
-                accessibilityLabel="Sign in or sign up"
+                accessibilityLabel="My profile"
               >
-                <Ionicons name="log-in-outline" size={18} color="#2E8B57" />
+                <Ionicons name="person-outline" size={18} color="#2E8B57" />
                 <Text className="text-lg text-[#1F1F1F] font-semibold">
-                  Sign In / Sign Up
+                  Profile
                 </Text>
               </Pressable>
+
+              <View className="h-px bg-[#E8E1D1]" />
+
+              {isAuthLoaded && isSignedIn ? (
+                <Pressable
+                  onPress={() => {
+                    setIsMiniMenuOpen(false);
+                    void signOut();
+                  }}
+                  className="px-4 py-4 flex-row-reverse items-center gap-3 active:bg-[#F9F9F9]"
+                  accessibilityRole="button"
+                  accessibilityLabel="Logout"
+                >
+                  <Ionicons name="log-out-outline" size={18} color="#2E8B57" />
+                  <Text className="text-lg text-[#1F1F1F] font-semibold">
+                    Logout
+                  </Text>
+                </Pressable>
+              ) : (
+                <Pressable
+                  onPress={() => {
+                    setIsMiniMenuOpen(false);
+                    router.push("/(auth)/sign-in");
+                  }}
+                  className="px-4 py-4 flex-row-reverse items-center gap-3 active:bg-[#F9F9F9]"
+                  accessibilityRole="button"
+                  accessibilityLabel="Sign in or sign up"
+                >
+                  <Ionicons name="log-in-outline" size={18} color="#2E8B57" />
+                  <Text className="text-lg text-[#1F1F1F] font-semibold">
+                    Sign In / Sign Up
+                  </Text>
+                </Pressable>
+              )}
             </View>
           </View>
         </View>

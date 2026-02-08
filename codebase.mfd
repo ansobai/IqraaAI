@@ -1,0 +1,252 @@
+# Codebase Guide: IqraaAI
+
+This file explains the system architecture and what each major file/module does.
+
+> Scope note: this repo contains a very large `assets/` tree (Quran SVGs, fonts, images, JSON). Those files are content, not logic, so they’re described at the directory level instead of one-by-one.
+
+---
+
+## 1) System architecture (high level)
+
+**Components**
+- **Mobile app**: Expo + React Native using `expo-router` for navigation.
+- **Auth**: Clerk (`@clerk/clerk-expo`) provides sign-in/sign-up and issues JWTs.
+- **API**: FastAPI service (`api/`) that verifies Clerk JWTs and exposes REST endpoints.
+- **Database**: standalone PostgreSQL (`db/schema.sql`) holding application data (currently: `profiles`).
+
+**Request path**
+```
+Expo App ──(Clerk JWT in Authorization header)──▶ FastAPI ──(SQL)──▶ Postgres
+   │                                                  │
+   └──────────── Clerk SDK (sign in/up) ──────────────┘
+```
+
+**Trust boundaries**
+- The **client is untrusted**: it never sends `clerk_user_id` in the body.
+- The API derives the user identity from the **verified JWT `sub` claim**.
+- Row ownership is enforced in the **API query layer** (`WHERE clerk_user_id = <sub>`), not via Supabase RLS.
+
+---
+
+## 2) Data model (Postgres)
+
+### `public.profiles`
+Defined in `db/schema.sql`.
+- Primary key: `clerk_user_id` (text)
+- Columns: `email`, `first_name`, `last_name`, `phone_number`, `avatar_url`, `created_at`, `updated_at`
+
+**DB integrity behavior**
+- `updated_at` auto-updates via trigger `set_profiles_updated_at`.
+- `email` is treated as read-only via trigger `prevent_profiles_email_update`.
+
+---
+
+## 3) Backend API (FastAPI)
+
+### Endpoints
+Implemented in `api/app/routes/profile.py`.
+- `GET /healthz` → `{ "ok": true }`
+- `GET /v1/profile` → returns the caller’s profile (404 if missing)
+- `POST /v1/profile` → create-if-missing (201 if created, 200 if already existed)
+- `PATCH /v1/profile` → update fields (404 if profile missing)
+
+### Auth
+Implemented in `api/app/auth.py`.
+- Expects `Authorization: Bearer <token>`
+- Fetches Clerk JWKS from: `${CLERK_ISSUER}/.well-known/jwks.json`
+- Verifies:
+  - signature (RS256)
+  - `iss` equals `CLERK_ISSUER`
+  - `exp` / `nbf`
+  - optionally `aud` if `CLERK_AUDIENCE` is set
+- Returns `clerk_user_id = decoded["sub"]`
+
+### Database access
+Implemented in `api/app/main.py` + `api/app/db.py`.
+- Creates an `asyncpg` connection pool at startup (`app.state.db_pool`)
+- Stores settings on `app.state.settings`
+- Route handlers acquire a connection from the pool and run parameterized SQL
+
+### Backend configuration
+`api/app/config.py`
+- Loads environment variables and validates required settings.
+- Parses CORS origin list.
+
+### Backend files (what each does)
+- `api/app/main.py`: creates the FastAPI app, wires middleware (CORS), sets up lifespan (pool), registers routes.
+- `api/app/config.py`: `Settings` and `load_settings_from_env()` validation/parsing.
+- `api/app/auth.py`: Clerk JWT verification and `get_current_user_id` dependency.
+- `api/app/db.py`: helper to fetch the initialized asyncpg pool from app state.
+- `api/app/schemas.py`: Pydantic request/response models using snake_case to match DB + app `Profile` type.
+- `api/app/routes/profile.py`: profile CRUD endpoints, all scoped to authenticated user.
+- `api/requirements.txt`: minimal production dependencies.
+- `api/.env.example`: backend env template (no secrets).
+- `api/scripts/apply_schema.py`: applies `db/schema.sql` to the database specified by `DATABASE_URL`.
+- `api/requirements-dev.txt`: test-only dependencies.
+- `api/tests/test_profile.py`: basic API tests (require `TEST_DATABASE_URL`).
+
+---
+
+## 4) Mobile app (Expo / React Native)
+
+### Navigation and layouts
+- `app/_layout.tsx`
+  - Root layout.
+  - Initializes **ClerkProvider** + token cache (SecureStore).
+  - Loads fonts and controls splash screen.
+- `app/(auth)/_layout.tsx`
+  - Stack layout for auth routes.
+- `app/(auth)/sign-in.tsx`, `app/(auth)/sign-up.tsx`
+  - Entry routes that render the shared `components/Auth/AuthScreen.tsx` with the correct initial tab.
+
+### Dashboard / reader entrypoint
+- `app/index.tsx`
+  - Dashboard/search UI.
+  - Uses `useQuranSearch()` to debounce and search locally.
+  - Redirects to the last read page using `AsyncStorage` (`LAST_READ_PAGE_KEY`) and helpers in `utils/mushafData.ts`.
+
+### Surah reading route(s)
+- `app/(surahs)/[surahId].tsx`
+  - Screen for reading a surah / navigating pages (uses reader components and data helpers).
+- `app/(surahs)/_layout.tsx` (if present)
+  - Stack/layout config for the surah routes.
+
+### Profile routes (API-backed)
+- `app/(profile)/profile.tsx`
+  - Loads or creates the user’s profile via API calls.
+  - Shows “missing API config” message if `EXPO_PUBLIC_API_URL` isn’t set.
+- `app/(profile)/edit-profile.tsx`
+  - Edits first/last/phone and saves via API `PATCH /v1/profile`.
+
+### Client-side API helper (Clerk JWT → FastAPI)
+- `utils/apiClient.ts`
+  - `useAuthedFetch()` returns a function that:
+    - calls `getToken()` from Clerk
+    - sets `Authorization: Bearer <token>`
+    - sets JSON `Content-Type` when a body is present
+    - rewrites `localhost`→`10.0.2.2` on Android emulator
+- `utils/profileApi.ts`
+  - Implements `fetchProfile`, `createProfileIfMissing`, `updateProfile` via REST calls.
+  - Treats 404 as “no profile yet” and parses FastAPI `{ detail }` errors when present.
+
+### App UI components (logic summary)
+- `components/Auth/AuthScreen.tsx`
+  - Single UI for sign-in/sign-up flows using Clerk hooks:
+    - email/password sign-in
+    - email/password sign-up with email-code verification
+    - Google OAuth via `useOAuth({ strategy: "oauth_google" })`
+  - Uses `useWarmUpBrowser()` to improve OAuth UX.
+- `components/QuranReader.tsx`
+  - Wrapper around `react-native-pager-view` to render Quran pages and handle page index changes.
+- `components/QuranPage.tsx`
+  - Loads SVG XML for a page via `utils/quranSvgRegistry.ts`.
+  - Adjusts SVG `viewBox` to optionally crop side markers.
+  - Optionally highlights a verse by injecting `fill` into matching SVG elements.
+- `components/QuranPager.tsx`
+  - Custom horizontal pager using gestures + Reanimated.
+  - Supports boundary resistance and snapping.
+- `components/BookmarkModal.tsx`
+  - UI for viewing/selecting bookmarks stored locally.
+- `components/SurahBanner.tsx`, `components/SurahCarousel.tsx`
+  - UI elements for displaying surah titles and navigation.
+
+### Hooks (logic summary)
+- `hooks/useWarmUpBrowser.ts`
+  - Warms up `expo-web-browser` for OAuth and completes pending auth sessions.
+- `hooks/useQuranSearch.ts`
+  - Debounced local search calling `utils/searchUtils.ts`.
+- `hooks/useBookmarks.ts`
+  - Manages bookmark list in `AsyncStorage` with normalization + helpers.
+
+---
+
+## 5) Quran data + rendering utilities
+
+> These utilities primarily work with the static Quran assets under `assets/`.
+
+- `utils/quranSvgRegistry.ts`
+  - Locates and loads SVG XML for Quran pages (and caches results).
+- `utils/mushafData.ts`
+  - Helpers mapping pages ↔ surahs/juz and reading the “mushaf lines” metadata.
+- `utils/searchUtils.ts`
+  - Implements `searchQuran()` and `SearchResult` types for local search.
+- `utils/quranProcessor.ts`
+  - Parsing/processing helpers for Quran JSON assets (used by scripts or runtime).
+- `utils/toArabicNumbers.ts`
+  - Converts numbers to Arabic numeral glyphs for UI.
+
+---
+
+## 6) Constants and types
+
+- `constants/storage.ts`: AsyncStorage key names (bookmarks, last read, etc).
+- `constants/surahNames.ts`, `constants/juzNames.ts`: Arabic names for UI.
+- `constants/theme.ts`: theme constants (colors/spacing).
+- `types/Profile.ts`: shared profile shape used by the app (matches API response keys).
+- `types/svg.d.ts`, `types/require-context.d.ts`: TypeScript module declarations for assets/import helpers.
+
+---
+
+## 7) Scripts and generated content
+
+- `scripts/generate-pages.ts`: codegen for route/page data.
+- `scripts/build-mushaf-lines.ts`: builds mushaf line metadata.
+- `scripts/build-quran-svg-manifest.ts`: builds SVG manifest for quick lookup.
+- `scripts/clean-mushaf.js`: cleanup utility for mushaf assets.
+
+---
+
+## 7.5) Tooling and project config
+
+- `package.json`: JS/TS dependencies and Expo scripts (`start`, `lint`, generators).
+- `package-lock.json`: pinned dependency tree for npm.
+- `tsconfig.json`: TypeScript strict mode + path alias `@/*`.
+- `eslint.config.js`: lint rules (via `expo lint`).
+- `babel.config.js`: Babel config for Expo/Metro.
+- `metro.config.js`: Metro bundler config (asset transforms, SVG transformer, etc).
+- `tailwind.config.js`: Tailwind/NativeWind configuration for className styling.
+- `app.json`: Expo app config (name, icons, runtime settings).
+- `eas.json`: EAS build configuration (if you use Expo Application Services).
+- `.gitignore`: repo ignore rules (env files, build outputs, etc).
+- `.vscode/*`: editor settings/extensions for local dev.
+
+---
+
+## 8) Legacy Supabase artifacts (kept for reference)
+
+- `supabase/profiles.sql`
+  - The original Supabase-oriented schema (RLS + JWT claim helpers).
+  - The standalone schema equivalent is `db/schema.sql`.
+
+---
+
+## 9) Environment variables
+
+### Mobile (`.env`)
+- `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY`: Clerk publishable key used by the app.
+- `EXPO_PUBLIC_API_URL`: base URL for the FastAPI service.
+
+### Backend (`api/.env`)
+- `DATABASE_URL`: Postgres connection string for the API.
+- `CLERK_ISSUER`: Clerk issuer URL (must match token `iss`).
+- `CLERK_AUDIENCE` (optional): if set, API verifies the token `aud`.
+- `CORS_ORIGINS`: comma-separated list of allowed origins.
+- `PORT`: API port (default 8000).
+
+---
+
+## 10) Common flows (end-to-end)
+
+### Profile load (App → API → DB)
+1. User signs in with Clerk.
+2. App calls `useAuthedFetch()` which:
+   - retrieves a Clerk JWT via `getToken()`
+   - sends `Authorization: Bearer <jwt>` to the API
+3. API verifies JWT, extracts `sub` as `clerk_user_id`.
+4. API queries `profiles` for that `clerk_user_id`.
+5. If missing, app calls `POST /v1/profile` to create it (idempotent).
+
+### Profile update
+1. App collects updated fields and sends `PATCH /v1/profile`.
+2. API updates only the authenticated user’s row.
+3. DB trigger updates `updated_at`.

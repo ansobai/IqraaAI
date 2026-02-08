@@ -1,4 +1,5 @@
 // app/(surahs)/[surahId].tsx
+import { useAuth } from "@clerk/clerk-expo";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Asset } from "expo-asset";
@@ -15,6 +16,7 @@ import {
   FlatList,
   Keyboard,
   LayoutChangeEvent,
+  Modal,
   Pressable,
   ScrollView,
   Text,
@@ -108,6 +110,7 @@ const getNearbyPages = (pageNumber: number, windowSize: number) =>
   );
 
 export default function SurahScreen() {
+  const { isLoaded: isAuthLoaded, isSignedIn, signOut } = useAuth();
   const {
     surahId,
     startAt,
@@ -137,6 +140,7 @@ export default function SurahScreen() {
   const [pageIndex, setPageIndex] = useState(initialIndex);
   const hasRestoredRef = useRef(false);
   const [isMini, setIsMini] = useState(false);
+  const [isMiniMenuOpen, setIsMiniMenuOpen] = useState(false);
   const [bookmarkIconXml, setBookmarkIconXml] = useState<string | null>(null);
   const [moonIconXml, setMoonIconXml] = useState<string | null>(null);
   const [isBookmarkModalOpen, setIsBookmarkModalOpen] = useState(false);
@@ -156,6 +160,10 @@ export default function SurahScreen() {
   const setMiniMode = useCallback((next: boolean) => {
     setIsMini(next);
   }, []);
+
+  useEffect(() => {
+    if (!isMini) setIsMiniMenuOpen(false);
+  }, [isMini]);
 
   useEffect(() => {
     let isActive = true;
@@ -418,7 +426,7 @@ export default function SurahScreen() {
     (surahNumber: number) => {
       setPageIndex(getFirstPageIndexForSurah(surahNumber));
       router.replace({
-        pathname: "/(surahs)/[surahId]",
+        pathname: "/[surahId]",
         params: {
           surahId: String(surahNumber),
           startAt: "first",
@@ -443,7 +451,7 @@ export default function SurahScreen() {
           setPageIndex(targetIndex);
         }
         router.replace({
-          pathname: "/(surahs)/[surahId]",
+          pathname: "/[surahId]",
           params: {
             surahId: String(result.surahId),
             page: String(result.pageNumber),
@@ -512,6 +520,77 @@ export default function SurahScreen() {
     <SafeAreaView className="flex-1 bg-[#FFFDF5]" edges={["top", "bottom"]}>
       <Stack.Screen options={{ headerShown: false }} />
 
+      <Modal
+        visible={isMiniMenuOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsMiniMenuOpen(false)}
+      >
+        <View className="flex-1">
+          <Pressable
+            style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}
+            onPress={() => setIsMiniMenuOpen(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Close menu"
+          >
+            <View className="flex-1 bg-black/40" />
+          </Pressable>
+
+          <View className="flex-1 items-end pt-16 px-5" pointerEvents="box-none">
+            <View className="w-64 rounded-2xl bg-[#FFFDF5] border border-[#E8E1D1] overflow-hidden">
+              <Pressable
+                onPress={() => {
+                  setIsMiniMenuOpen(false);
+                  router.push("/(profile)/profile");
+                }}
+                className="px-4 py-4 flex-row-reverse items-center gap-3 active:bg-[#F9F9F9]"
+                accessibilityRole="button"
+                accessibilityLabel="My profile"
+              >
+                <Ionicons name="person-outline" size={18} color="#2E8B57" />
+                <Text className="text-lg text-[#1F1F1F] font-semibold">
+                  Profile
+                </Text>
+              </Pressable>
+
+              <View className="h-px bg-[#E8E1D1]" />
+
+              {isAuthLoaded && isSignedIn ? (
+                <Pressable
+                  onPress={() => {
+                    setIsMiniMenuOpen(false);
+                    void signOut();
+                  }}
+                  className="px-4 py-4 flex-row-reverse items-center gap-3 active:bg-[#F9F9F9]"
+                  accessibilityRole="button"
+                  accessibilityLabel="Logout"
+                >
+                  <Ionicons name="log-out-outline" size={18} color="#2E8B57" />
+                  <Text className="text-lg text-[#1F1F1F] font-semibold">
+                    Logout
+                  </Text>
+                </Pressable>
+              ) : (
+                <Pressable
+                  onPress={() => {
+                    setIsMiniMenuOpen(false);
+                    router.push("/(auth)/sign-in");
+                  }}
+                  className="px-4 py-4 flex-row-reverse items-center gap-3 active:bg-[#F9F9F9]"
+                  accessibilityRole="button"
+                  accessibilityLabel="Sign in or sign up"
+                >
+                  <Ionicons name="log-in-outline" size={18} color="#2E8B57" />
+                  <Text className="text-lg text-[#1F1F1F] font-semibold">
+                    Sign In / Sign Up
+                  </Text>
+                </Pressable>
+              )}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {isMini ? (
         <View
           className="pt-10 pb-1"
@@ -525,8 +604,17 @@ export default function SurahScreen() {
             zIndex: 5,
           }}
         >
-          <View className="px-5 mb-1">
-            <View className="flex-row-reverse bg-[#F0EBE0] rounded-full px-4 py-2 items-center gap-2 border border-[#E8E1D1]">
+          <View className="px-5 mb-1 flex-row-reverse items-center gap-3">
+            <Pressable
+              onPress={() => setIsMiniMenuOpen(true)}
+              className="w-10 h-10 rounded-full bg-[#F0EBE0] items-center justify-center border border-[#E8E1D1]"
+              accessibilityRole="button"
+              accessibilityLabel="Open menu"
+            >
+              <Ionicons name="menu" size={18} color="#8F7E5E" />
+            </Pressable>
+
+            <View className="flex-1 flex-row-reverse bg-[#F0EBE0] rounded-full px-4 py-2 items-center gap-2 border border-[#E8E1D1]">
               <Ionicons name="search" size={18} color="#8F7E5E" />
               <TextInput
                 placeholder="بحث في السور..."

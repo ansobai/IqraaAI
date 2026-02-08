@@ -16,21 +16,12 @@ from .routes.profile import router as profile_router
 def create_app(settings: Optional[Settings] = None) -> FastAPI:
     dotenv_path = Path(__file__).resolve().parents[1] / ".env"
     load_dotenv(dotenv_path=dotenv_path)
+    resolved_settings = settings or load_settings_from_env()
+    allow_credentials = "*" not in resolved_settings.cors_origins
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        resolved_settings = settings or load_settings_from_env()
         app.state.settings = resolved_settings
-
-        allow_credentials = "*" not in resolved_settings.cors_origins
-        if not any(m.cls is CORSMiddleware for m in app.user_middleware):
-            app.add_middleware(
-                CORSMiddleware,
-                allow_origins=resolved_settings.cors_origins,
-                allow_credentials=allow_credentials,
-                allow_methods=["*"],
-                allow_headers=["*"],
-            )
 
         app.state.db_pool = await asyncpg.create_pool(resolved_settings.database_url)
         try:
@@ -39,6 +30,13 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             await app.state.db_pool.close()
 
     app = FastAPI(lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=resolved_settings.cors_origins,
+        allow_credentials=allow_credentials,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.get("/healthz")
     async def healthz():

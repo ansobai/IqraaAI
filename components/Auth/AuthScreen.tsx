@@ -8,6 +8,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   Text,
   TextInput,
   View,
@@ -224,11 +225,19 @@ export default function AuthScreen({
         onPress={Keyboard.dismiss}
         accessible={false}
       >
-        <View
-          className="flex-1 items-center bg-[#FFFDF5]"
-          style={{ paddingHorizontal: 20, paddingBottom: 24 }}
+        <ScrollView
+          style={{ flex: 1, backgroundColor: "#FFFDF5" }}
+          contentContainerStyle={{
+            flexGrow: 1,
+            alignItems: "center",
+            paddingHorizontal: 20,
+            paddingBottom: 32,
+          }}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
         >
-          <View className="w-full flex-1" style={{ maxWidth: contentWidth }}>
+          <View className="w-full" style={{ maxWidth: contentWidth }}>
             <View
               className="pt-4 pb-2"
               style={{ marginBottom: isCompactHeight ? 2 : 6 }}
@@ -349,7 +358,7 @@ export default function AuthScreen({
               </Pressable>
             </View>
 
-            <View className="flex-1" style={{ marginTop: isCompactHeight ? 14 : 18 }}>
+            <View style={{ marginTop: isCompactHeight ? 14 : 18 }}>
               {tab === "signIn" ? (
                 <>
                   <View>
@@ -767,7 +776,7 @@ export default function AuthScreen({
               )}
             </View>
           </View>
-        </View>
+        </ScrollView>
       </Pressable>
     </KeyboardAvoidingView>
   );

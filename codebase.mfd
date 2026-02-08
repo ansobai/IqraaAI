@@ -250,3 +250,57 @@ Implemented in `api/app/main.py` + `api/app/db.py`.
 1. App collects updated fields and sends `PATCH /v1/profile`.
 2. API updates only the authenticated user’s row.
 3. DB trigger updates `updated_at`.
+
+---
+
+## 11) Deployment (Google Cloud: current production path)
+
+### Target stack
+- **Runtime**: Cloud Run service `iqraaai-api`
+- **Container registry**: Artifact Registry repo `iqraaai-api`
+- **Database**: Cloud SQL PostgreSQL instance `iqraaai-db`, database `iqraaai`
+- **Secrets**: Secret Manager (`DATABASE_URL`, `CLERK_ISSUER`)
+
+### Required runtime config on Cloud Run
+- `DATABASE_URL` must be injected from Secret Manager.
+- `CLERK_ISSUER` must be injected from Secret Manager and must match JWT `iss` exactly.
+- `CLERK_AUDIENCE` should be empty unless JWT `aud` verification is intentionally required.
+- `CORS_ORIGINS` is currently `*` for mobile clients.
+- Cloud SQL instance connection must be attached via `--add-cloudsql-instances`.
+
+### Backend deploy commands (current)
+```bash
+gcloud builds submit api --tag me-central1-docker.pkg.dev/iqraa-ai/iqraaai-api/iqraaai-api:latest
+gcloud run deploy iqraaai-api --image me-central1-docker.pkg.dev/iqraa-ai/iqraaai-api/iqraaai-api:latest --region me-central1 --service-account iqraaai-api-sa@iqraa-ai.iam.gserviceaccount.com --allow-unauthenticated --port 8000 --add-cloudsql-instances="$INSTANCE_CONNECTION_NAME" --set-secrets "DATABASE_URL=DATABASE_URL:latest,CLERK_ISSUER=CLERK_ISSUER:latest" --set-env-vars "CORS_ORIGINS=*"
+```
+
+### DB schema apply (one-time / migrations)
+- Apply SQL from `db/schema.sql` in Cloud SQL Studio against database `iqraaai`.
+- Verify with:
+```sql
+select count(*) from public.profiles;
+```
+
+### Mobile app production API base URL
+- `.env` must point to Cloud Run URL (not localhost):
+- `EXPO_PUBLIC_API_URL=https://iqraaai-api-895277177460.me-central1.run.app`
+
+### Common troubleshooting signals
+- `401 Invalid token` on `/v1/profile` usually means `CLERK_ISSUER` mismatch or malformed secret value.
+- `Missing required env vars` means Cloud Run revision does not have secrets attached correctly.
+- `Cannot add middleware after an application has started` was fixed by moving CORS middleware registration out of lifespan in `api/app/main.py`.
+
+---
+
+## 12) What to run when changes are made
+
+- **Frontend-only changes** (`app/`, `components/`, UI logic):
+  - Run Expo only (`npx expo start -c`).
+- **Backend code changes** (`api/app/**`, auth/routes/config):
+  - Rebuild image + redeploy Cloud Run.
+- **DB schema changes** (`db/schema.sql`):
+  - Apply SQL to Cloud SQL (and redeploy backend if code expects new schema).
+- **Secret value changes** (`DATABASE_URL`, `CLERK_ISSUER`):
+  - Add secret version + update Cloud Run service secrets.
+- **Cloud Run env/service config changes** (`CORS_ORIGINS`, scaling, command):
+  - `gcloud run services update ...` (no image rebuild required).

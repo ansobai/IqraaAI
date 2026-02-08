@@ -51,10 +51,11 @@ export function useAuthedFetch(): AuthedFetch | null {
       }
 
       const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-      const url = path.startsWith("http") ? path : `${baseUrl}${normalizedPath}`;
+      const url = path.startsWith("http")
+        ? path
+        : `${baseUrl}${normalizedPath}`;
 
       return fetch(url, { ...init, headers });
     };
   }, [getToken]);
 }
-

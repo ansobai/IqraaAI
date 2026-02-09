@@ -1,4 +1,4 @@
-# Welcome to your Expo app 👋
+# IqraaAI (Expo + FastAPI + Postgres)
 
 This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
 
@@ -15,6 +15,49 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
    ```bash
    npx expo start
    ```
+
+## Auth (Clerk)
+
+1. Copy `.env.example` to `.env`
+2. Set `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` to your Clerk publishable key
+3. Set `EXPO_PUBLIC_API_URL` (example: `http://localhost:8000`)
+
+> Android emulator note: if you use `http://localhost:8000`, the app automatically rewrites it to `http://10.0.2.2:8000` on Android.
+
+## Backend API (FastAPI)
+
+1. Install Python deps
+
+   ```bash
+   python -m pip install -r api/requirements.txt
+   ```
+
+2. Configure backend env
+
+   ```bash
+   cp api/.env.example api/.env
+   ```
+
+   Required:
+   - `DATABASE_URL`
+   - `CLERK_ISSUER` (must match the JWT `iss` claim)
+
+3. Apply DB schema
+
+   ```bash
+   python api/scripts/apply_schema.py
+   ```
+
+4. Run the API
+
+   ```bash
+   python -m uvicorn api.app.main:app --reload --port 8000
+   ```
+
+## Database (Postgres)
+
+- Schema: `db/schema.sql`
+- Supabase data migration (optional): `db/MIGRATION.md`
 
 In the output, you'll find options to open the app in a
 

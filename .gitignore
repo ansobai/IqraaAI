@@ -38,6 +38,13 @@ yarn-error.*
 
 # local env files
 .env*.local
+.env
+.env.*
+!.env.example
+
+# database exports
+db/*_data.sql
+db/*.dump
 
 # typescript
 *.tsbuildinfo

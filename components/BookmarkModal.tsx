@@ -91,7 +91,7 @@ export default function BookmarkModal({
   const handleNavigate = useCallback(
     (bookmark: Bookmark) => {
       router.replace({
-        pathname: "/(surahs)/[surahId]",
+        pathname: "/[surahId]",
         params: {
           surahId: String(bookmark.surahId),
           page: String(bookmark.pageNumber),

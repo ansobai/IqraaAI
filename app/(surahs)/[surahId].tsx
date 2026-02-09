@@ -92,6 +92,13 @@ const PREFETCH_WINDOW = 3;
 const BOOKMARK_ICON = require("../../assets/images/bookmark-icon.svg");
 const MOON_ICON = require("../../assets/images/moon-icon.svg");
 const MICROPHONE_ICON = require("../../assets/images/microphone.png");
+const MUSHAF_PAGE_BACKGROUND = "#FFFAF2";
+const MUSHAF_ACCENT = "#BFE3F2";
+const MUSHAF_ACCENT_DARK = "#255A6D";
+const MUSHAF_SURFACE = "#EAF6FC";
+const MUSHAF_BORDER = "#C8E3EF";
+const MUSHAF_BORDER_LIGHT = "#F6FCFF";
+const MUSHAF_MUTED = "#5F7886";
 
 const loadSvgAssetXml = async (moduleId: number): Promise<string | null> => {
   try {
@@ -547,15 +554,17 @@ export default function SurahScreen() {
         >
           <View
             style={{
-              backgroundColor: "rgba(16, 17, 17, 0.72)",
+              backgroundColor: "rgba(226, 242, 250, 0.98)",
+              borderWidth: 1,
+              borderColor: "#9BC4D6",
               borderRadius: 999,
-              paddingHorizontal: 12,
-              paddingVertical: 6,
+              paddingHorizontal: 14,
+              paddingVertical: 7,
             }}
           >
             <Text
               style={{
-                color: "#FFFFFF",
+                color: "#143441",
                 fontSize: 12,
                 fontWeight: "600",
               }}
@@ -569,7 +578,11 @@ export default function SurahScreen() {
   );
 
   return (
-    <SafeAreaView className="flex-1 bg-[#FFFDF5]" edges={["top", "bottom"]}>
+    <SafeAreaView
+      className="flex-1"
+      style={{ backgroundColor: MUSHAF_PAGE_BACKGROUND }}
+      edges={["top", "bottom"]}
+    >
       <Stack.Screen options={{ headerShown: false }} />
 
       <Modal
@@ -656,21 +669,19 @@ export default function SurahScreen() {
             zIndex: 5,
           }}
         >
-          <View className="px-5 mb-1 flex-row-reverse items-center gap-3">
-            <Pressable
-              onPress={() => setIsMiniMenuOpen(true)}
-              className="w-10 h-10 rounded-full bg-[#F0EBE0] items-center justify-center border border-[#E8E1D1]"
-              accessibilityRole="button"
-              accessibilityLabel="Open menu"
+          <View className="px-5 mb-1">
+            <View
+              className="flex-row-reverse rounded-full px-4 py-2 items-center gap-2"
+              style={{
+                backgroundColor: MUSHAF_SURFACE,
+                borderColor: MUSHAF_BORDER,
+                borderWidth: 1,
+              }}
             >
-              <Ionicons name="menu" size={18} color="#8F7E5E" />
-            </Pressable>
-
-            <View className="flex-1 flex-row-reverse bg-[#F0EBE0] rounded-full px-4 py-2 items-center gap-2 border border-[#E8E1D1]">
-              <Ionicons name="search" size={18} color="#8F7E5E" />
+              <Ionicons name="search" size={18} color={MUSHAF_MUTED} />
               <TextInput
                 placeholder="بحث في السور..."
-                placeholderTextColor="#8F7E5E"
+                placeholderTextColor={MUSHAF_MUTED}
                 className="flex-1 text-right text-base text-[#1F1F1F] font-uthmanic"
                 value={query}
                 onChangeText={setQuery}
@@ -680,12 +691,17 @@ export default function SurahScreen() {
 
           {query.length > 0 ? (
             <View
-              className="mb-2 w-full bg-white rounded-2xl shadow-lg border border-[#E8E1D1] overflow-hidden"
-              style={{ maxHeight: windowDimensions.height * 0.55 }}
+              className="mb-2 w-full rounded-2xl shadow-lg overflow-hidden"
+              style={{
+                maxHeight: windowDimensions.height * 0.55,
+                backgroundColor: "#FFFFFF",
+                borderColor: MUSHAF_BORDER,
+                borderWidth: 1,
+              }}
             >
               {isSearching ? (
                 <View className="py-6 items-center justify-center">
-                  <ActivityIndicator color="#2E8B57" />
+                  <ActivityIndicator color={MUSHAF_ACCENT_DARK} />
                 </View>
               ) : results.length === 0 ? (
                 <View className="py-6 items-center justify-center px-5">
@@ -706,8 +722,8 @@ export default function SurahScreen() {
                   renderItem={({ item }) => {
                     const rowClassName =
                       item.type === "verse"
-                        ? "px-4 py-4 min-h-[72px] border-b border-[#F0EBE0] flex-row-reverse items-center justify-between active:bg-[#F9F9F9]"
-                        : "px-4 py-3 border-b border-[#F0EBE0] flex-row-reverse items-center justify-between active:bg-[#F9F9F9]";
+                        ? "px-4 py-4 min-h-[72px] border-b border-[#DBECF5] flex-row-reverse items-center justify-between active:bg-[#F5FBFF]"
+                        : "px-4 py-3 border-b border-[#DBECF5] flex-row-reverse items-center justify-between active:bg-[#F5FBFF]";
                     return (
                       <Pressable
                         onPress={() => handleSearchResultPress(item)}
@@ -715,8 +731,8 @@ export default function SurahScreen() {
                       >
                         {item.type === "surah" ? (
                           <View className="flex-row-reverse items-center gap-3">
-                            <View className="w-8 h-8 rounded-full bg-[#E8E1D1] items-center justify-center">
-                              <Text className="text-[#8F7E5E] font-bold text-base">
+                            <View className="w-8 h-8 rounded-full bg-[#D7EBF6] items-center justify-center">
+                              <Text className="text-[#4A6776] font-bold text-base">
                                 {toArabicNumber(item.id)}
                               </Text>
                             </View>
@@ -727,7 +743,7 @@ export default function SurahScreen() {
                         ) : (
                           <View className="flex-1">
                             <View className="flex-row-reverse items-center gap-1 mb-0">
-                              <Text className="text-xl text-[#2E8B57] font-bold font-uthmanic">
+                              <Text className="text-xl text-[#255A6D] font-bold font-uthmanic">
                                 سورة {item.surahName}
                               </Text>
                               <Text className="text-2xl text-[#999] font-uthmanic">
@@ -772,8 +788,11 @@ export default function SurahScreen() {
             }}
           >
             <View
-              className="mx-6 mb-3 rounded-t-3xl bg-[#F0EBE0] border border-[#E8E1D1] px-10 py-3"
+              className="mx-6 mb-3 rounded-t-3xl px-10 py-3"
               style={{
+                backgroundColor: MUSHAF_SURFACE,
+                borderColor: MUSHAF_BORDER,
+                borderWidth: 1,
                 shadowColor: "#000",
                 shadowOpacity: 0.08,
                 shadowRadius: 12,
@@ -817,7 +836,7 @@ export default function SurahScreen() {
                     style={{
                       width: 22,
                       height: 22,
-                      tintColor: tasmee.isRunning ? "#FFFFFF" : "#1F1F1F",
+                      tintColor: tasmee.isRunning ? "#FFFFFF" : MUSHAF_ACCENT_DARK,
                     }}
                     resizeMode="contain"
                   />
@@ -874,15 +893,15 @@ export default function SurahScreen() {
             <View
               style={[
                 isMini && {
-                  padding: 8,
-                  backgroundColor: "#FFF7E8",
-                  borderRadius: 18,
-                  borderWidth: 1,
-                  borderColor: "#E8E1D1",
-                  shadowColor: "#000",
-                  shadowOpacity: 0.08,
-                  shadowRadius: 10,
-                  shadowOffset: { width: 0, height: 6 },
+                  padding: 10,
+                  backgroundColor: MUSHAF_ACCENT,
+                  borderRadius: 20,
+                  borderWidth: 2,
+                  borderColor: MUSHAF_BORDER_LIGHT,
+                  shadowColor: "#4C7F95",
+                  shadowOpacity: 0.22,
+                  shadowRadius: 12,
+                  shadowOffset: { width: 0, height: 7 },
                   elevation: 4,
                 },
               ]}

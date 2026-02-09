@@ -22,7 +22,7 @@ export interface TasmeeOverlayProps {
 }
 
 const estimatePlaceholderWidth = (wordText: string) =>
-  Math.max(16, Math.min(110, wordText.length * 9));
+  Math.max(22, Math.min(132, Math.round(wordText.length * 10.5 + 6)));
 
 const toOverlayLines = (pageData: MushafPageLines): OverlayLine[] => {
   let wordCursor = 0;
@@ -68,7 +68,10 @@ function TasmeeOverlay({ pageData, isLocked, wordStates }: TasmeeOverlayProps) {
           {line.tokens.map((token, tokenIndex) => {
             if (token.wordIndex == null || token.charType !== "word") {
               return (
-                <Text key={`${line.lineNumber}-${tokenIndex}`} style={styles.marker}>
+                <Text
+                  key={`${line.lineNumber}-${tokenIndex}`}
+                  style={styles.markerSpacer}
+                >
                   {token.text}
                 </Text>
               );
@@ -90,15 +93,7 @@ function TasmeeOverlay({ pageData, isLocked, wordStates }: TasmeeOverlayProps) {
             }
 
             return (
-              <Text
-                key={`${line.lineNumber}-${tokenIndex}`}
-                style={[
-                  styles.word,
-                  state === "revealed_correct"
-                    ? styles.wordRevealed
-                    : styles.wordStatic,
-                ]}
-              >
+              <Text key={`${line.lineNumber}-${tokenIndex}`} style={styles.wordSpacer}>
                 {token.text}
               </Text>
             );
@@ -114,7 +109,7 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     paddingHorizontal: 10,
     paddingVertical: 12,
-    backgroundColor: "rgba(255, 253, 245, 0.96)",
+    backgroundColor: "transparent",
     justifyContent: "center",
   },
   line: {
@@ -124,32 +119,30 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 6,
   },
-  word: {
+  wordSpacer: {
     fontFamily: "UthmanicHafs",
     fontSize: 19,
     marginHorizontal: 2,
     marginVertical: 2,
+    color: "transparent",
   },
-  wordStatic: {
-    color: "#6D5B3F",
-  },
-  wordRevealed: {
-    color: "#1F1F1F",
-  },
-  marker: {
+  markerSpacer: {
     fontFamily: "UthmanicHafs",
     fontSize: 17,
-    color: "#907449",
+    color: "transparent",
     marginHorizontal: 2,
     marginVertical: 2,
   },
   hiddenWord: {
-    height: 20,
-    borderRadius: 5,
-    backgroundColor: "#D8C8A9",
+    minWidth: 22,
+    height: 22,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: "#9FD2E7",
+    backgroundColor: "#BEE6F6",
     marginHorizontal: 2,
     marginVertical: 2,
-    opacity: 0.85,
+    opacity: 0.96,
   },
 });
 

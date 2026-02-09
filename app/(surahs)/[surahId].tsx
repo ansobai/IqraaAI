@@ -14,6 +14,7 @@ import React, {
 import {
   ActivityIndicator,
   FlatList,
+  Image,
   Keyboard,
   LayoutChangeEvent,
   Modal,
@@ -39,7 +40,9 @@ import QuranPage from "../../components/QuranPage";
 import QuranPager from "../../components/QuranPager";
 import BookmarkModal from "../../components/BookmarkModal";
 import SurahCarousel from "../../components/SurahCarousel";
+import TasmeeOverlay from "../../components/TasmeeOverlay";
 import { LAST_READ_PAGE_KEY } from "../../constants/storage";
+import { useTasmeeSession } from "../../hooks/useTasmeeSession";
 import { ARABIC_SURAHS } from "../../constants/surahNames";
 import { useQuranSearch } from "../../hooks/useQuranSearch";
 import {
@@ -88,6 +91,7 @@ const DOUBLE_TAP_MAX_DURATION = 120;
 const PREFETCH_WINDOW = 3;
 const BOOKMARK_ICON = require("../../assets/images/bookmark-icon.svg");
 const MOON_ICON = require("../../assets/images/moon-icon.svg");
+const MICROPHONE_ICON = require("../../assets/images/microphone.png");
 
 const loadSvgAssetXml = async (moduleId: number): Promise<string | null> => {
   try {
@@ -264,6 +268,11 @@ export default function SurahScreen() {
   }, [initialIndex, pageParam]);
 
   const page = PAGES[pageIndex] ?? PAGES[FALLBACK_PAGE_INDEX];
+  const currentPageNumber = page?.pageNumber ?? FALLBACK_PAGE_NUMBER;
+  const tasmee = useTasmeeSession({
+    pageNumber: currentPageNumber,
+    surahId: id,
+  });
 
   useEffect(() => {
     if (isMini) {
@@ -349,7 +358,7 @@ export default function SurahScreen() {
     };
   });
 
-  const gesturesEnabled = !isLandscape;
+  const gesturesEnabled = !isLandscape && !tasmee.isRunning;
 
   const pinch = Gesture.Pinch()
     .enabled(!isMini && gesturesEnabled)
@@ -424,6 +433,9 @@ export default function SurahScreen() {
 
   const handleSelectSurah = useCallback(
     (surahNumber: number) => {
+      if (tasmee.isRunning) {
+        void tasmee.stopSession();
+      }
       setPageIndex(getFirstPageIndexForSurah(surahNumber));
       router.replace({
         pathname: "/[surahId]",
@@ -433,11 +445,14 @@ export default function SurahScreen() {
         },
       });
     },
-    [getFirstPageIndexForSurah, router],
+    [getFirstPageIndexForSurah, router, tasmee],
   );
 
   const handleSearchResultPress = useCallback(
     (result: SearchResult) => {
+      if (tasmee.isRunning) {
+        void tasmee.stopSession();
+      }
       setQuery("");
       Keyboard.dismiss();
 
@@ -472,6 +487,7 @@ export default function SurahScreen() {
       miniModeValue,
       router,
       setQuery,
+      tasmee,
     ],
   );
 
@@ -508,10 +524,46 @@ export default function SurahScreen() {
           initialIndex={pageIndex}
           onIndexChange={setPageIndex}
           renderItem={renderPage}
-          scrollEnabled
+          scrollEnabled={!tasmee.isRunning}
           pageWidth={pageSize.width}
           simultaneousGestures={[pinch, doubleTap]}
         />
+      ) : null}
+      <TasmeeOverlay
+        pageData={tasmee.pageData}
+        wordStates={tasmee.wordStates}
+        isLocked={tasmee.isLocked}
+      />
+      {tasmee.isListeningForStart ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            top: 14,
+            left: 0,
+            right: 0,
+            alignItems: "center",
+          }}
+        >
+          <View
+            style={{
+              backgroundColor: "rgba(16, 17, 17, 0.72)",
+              borderRadius: 999,
+              paddingHorizontal: 12,
+              paddingVertical: 6,
+            }}
+          >
+            <Text
+              style={{
+                color: "#FFFFFF",
+                fontSize: 12,
+                fontWeight: "600",
+              }}
+            >
+              Listening for your starting words...
+            </Text>
+          </View>
+        </View>
       ) : null}
     </Animated.View>
   );
@@ -729,7 +781,7 @@ export default function SurahScreen() {
                 elevation: 4,
               }}
             >
-              <View className="flex-row items-center justify-center gap-12">
+              <View className="flex-row items-center justify-center gap-10">
                 {bookmarkIconXml ? (
                   <Pressable
                     onPress={handleOpenBookmarkModal}
@@ -742,6 +794,34 @@ export default function SurahScreen() {
                 {moonIconXml ? (
                   <SvgXml xml={moonIconXml} width={28} height={28} />
                 ) : null}
+                <Pressable
+                  onPress={() =>
+                    tasmee.isRunning
+                      ? void tasmee.stopSession()
+                      : void tasmee.startSession()
+                  }
+                  accessibilityRole="button"
+                  accessibilityLabel={tasmee.isRunning ? "Stop tasmee" : "Start tasmee"}
+                  style={({ pressed }) => ({
+                    width: 34,
+                    height: 34,
+                    borderRadius: 17,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    backgroundColor: tasmee.isRunning ? "#BB4A4A" : "transparent",
+                    opacity: pressed ? 0.8 : 1,
+                  })}
+                >
+                  <Image
+                    source={MICROPHONE_ICON}
+                    style={{
+                      width: 22,
+                      height: 22,
+                      tintColor: tasmee.isRunning ? "#FFFFFF" : "#1F1F1F",
+                    }}
+                    resizeMode="contain"
+                  />
+                </Pressable>
               </View>
             </View>
           </View>
@@ -776,7 +856,7 @@ export default function SurahScreen() {
                   initialIndex={pageIndex}
                   onIndexChange={setPageIndex}
                   renderItem={renderPage}
-                  scrollEnabled
+                  scrollEnabled={!tasmee.isRunning}
                   pageWidth={pageSize.width}
                 />
               ) : null}

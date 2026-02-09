@@ -142,7 +142,7 @@ export default function SurahCarousel({ data, onSelect, initialScrollIndex = 0 }
             width: "100%", // Fill the ITEM_WIDTH
           }}
           textStyle={{
-            color: isActive ? "#2E8B57" : "#1F1F1F",
+            color: isActive ? "#255A6D" : "#1F1F1F",
             fontWeight: isActive ? "bold" : "normal",
           }}
         />

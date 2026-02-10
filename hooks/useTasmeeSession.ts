@@ -8,6 +8,10 @@ import type {
 } from "../types/tasmee";
 import { createTasmeeSession, openTasmeeSocket, stopTasmeeSession, type TasmeeSocketConnection } from "../utils/tasmeeApi";
 import { loadMushafPage, type MushafPageLines } from "../utils/mushafData";
+import {
+  getTasmeeStartFailurePolicy,
+  isDeltaForActiveTasmeeSession,
+} from "../utils/tasmeeSessionPolicy";
 import { applyFeedbackDelta, buildTasmeeWordStates } from "../utils/tasmeeState";
 
 type UseTasmeeSessionArgs = {
@@ -18,6 +22,8 @@ type UseTasmeeSessionArgs = {
 const MOCK_ANCHOR_DELAY_MS = 1200;
 const MOCK_REVEAL_INTERVAL_MS = 420;
 const ANCHOR_CONFIDENCE_THRESHOLD = 0.72;
+const SOCKET_INTERRUPTED_MESSAGE =
+  "Tasmee connection was interrupted. Please tap the mic to retry.";
 
 const countPageWords = (pageData: MushafPageLines | null) => {
   if (!pageData) return 0;
@@ -98,6 +104,10 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
   }, [clearMockProgressTimers]);
 
   const applyDeltaEvent = useCallback((event: TasmeeFeedbackDeltaEvent) => {
+    if (!isDeltaForActiveTasmeeSession(sessionIdRef.current, event)) {
+      return;
+    }
+
     const next = applyFeedbackDelta(
       {
         anchorWordIndex: anchorWordIndexRef.current,
@@ -177,6 +187,7 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
     if (statusRef.current === "starting") return;
     if (statusRef.current === "listening" || statusRef.current === "active") return;
 
+    statusRef.current = "starting";
     setStatus("starting");
     setErrorMessage(null);
     clearTransport();
@@ -192,6 +203,7 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
     totalWordCountRef.current = countPageWords(effectivePageData);
 
     const currentSessionId = `tasmee-${Date.now()}`;
+    sessionIdRef.current = currentSessionId;
     setSessionId(currentSessionId);
 
     try {
@@ -200,8 +212,10 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
         surah_id: surahId,
       });
 
+      sessionIdRef.current = remoteSession.session_id;
       setSessionId(remoteSession.session_id);
       setTransportMode("websocket");
+      statusRef.current = "listening";
       setStatus("listening");
 
       socketRef.current = openTasmeeSocket(remoteSession, {
@@ -210,28 +224,52 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
           if (statusRef.current === "idle" || statusRef.current === "stopped") {
             return;
           }
+          statusRef.current = "error";
+          setStatus("error");
+          setErrorMessage(SOCKET_INTERRUPTED_MESSAGE);
           setTransportMode("http");
         },
         onError: (error) => {
           if (statusRef.current === "idle" || statusRef.current === "stopped") {
             return;
           }
-          setErrorMessage(error.message);
+          statusRef.current = "error";
+          setStatus("error");
+          setErrorMessage(error.message || SOCKET_INTERRUPTED_MESSAGE);
           setTransportMode("http");
         },
       });
       return;
     } catch {
-      // API endpoint is not available yet. Keep the UI flow functional using a mock stream.
-    }
+      const startFailurePolicy = getTasmeeStartFailurePolicy();
+      if (startFailurePolicy.useMockProgress) {
+        startMockProgress(currentSessionId);
+        return;
+      }
 
-    startMockProgress(currentSessionId);
+      sessionIdRef.current = null;
+      setSessionId(null);
+      setTransportMode(null);
+      statusRef.current = startFailurePolicy.nextStatus;
+      setStatus(startFailurePolicy.nextStatus);
+      setErrorMessage(startFailurePolicy.errorMessage);
+      return;
+    }
   }, [applyDeltaEvent, clearTransport, pageData, pageNumber, resetProgress, startMockProgress, surahId]);
 
   const stopSession = useCallback(async () => {
-    clearTransport();
     const currentSessionId = sessionIdRef.current;
     const currentTransport = transportModeRef.current;
+
+    statusRef.current = "idle";
+    transportModeRef.current = null;
+    sessionIdRef.current = null;
+    setStatus("idle");
+    setTransportMode(null);
+    setSessionId(null);
+    setErrorMessage(null);
+
+    clearTransport();
 
     if (currentSessionId && currentTransport !== "mock") {
       try {
@@ -240,11 +278,6 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
         // Stopping should still reset UI state when network call fails.
       }
     }
-
-    setStatus("idle");
-    setTransportMode(null);
-    setSessionId(null);
-    setErrorMessage(null);
     resetProgress();
   }, [clearTransport, resetProgress]);
 

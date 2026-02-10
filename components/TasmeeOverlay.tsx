@@ -1,8 +1,13 @@
-import React, { memo, useMemo } from "react";
+import React, { memo, useEffect, useMemo, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 
 import type { TasmeeWordState } from "../types/tasmee";
 import type { MushafPageLines, MushafLineWord } from "../utils/mushafData";
+import {
+  getFallbackQuranTextBox,
+  resolveQuranTextBox,
+  type QuranTextBox,
+} from "../utils/quranTextBox";
 
 type OverlayToken = {
   text: string;
@@ -19,10 +24,20 @@ export interface TasmeeOverlayProps {
   pageData: MushafPageLines | null;
   isLocked: boolean;
   wordStates: TasmeeWordState[];
+  pageNumber: number;
+  pageWidth: number;
+  pageHeight: number;
 }
 
-const estimatePlaceholderWidth = (wordText: string) =>
-  Math.max(22, Math.min(132, Math.round(wordText.length * 10.5 + 6)));
+const PAGE_BACKGROUND_COLOR = "#FFFAF2";
+const LINE_SLOT_COUNT = 15;
+const MIN_WORD_FONT_SIZE = 15;
+const SPECIAL_CROP_RATIO = 0.01;
+const MARKER_CROP_RATIO_LEFT = 0.9;
+const MARKER_CROP_RATIO_RIGHT = 0.12;
+const MARKER_SHIFT_RATIO_EVEN = 0.55;
+const MARKER_SHIFT_RATIO_ODD = 0.55;
+const MARKER_SHIFT_PIXEL_OFFSET = -2;
 
 const toOverlayLines = (pageData: MushafPageLines): OverlayLine[] => {
   let wordCursor = 0;
@@ -50,56 +65,171 @@ const toOverlayLines = (pageData: MushafPageLines): OverlayLine[] => {
       lineNumber: line.lineNumber,
       tokens,
     };
-  });
+  }).sort((left, right) => left.lineNumber - right.lineNumber);
 };
 
-function TasmeeOverlay({ pageData, isLocked, wordStates }: TasmeeOverlayProps) {
+function TasmeeOverlay({
+  pageData,
+  isLocked,
+  wordStates,
+  pageNumber,
+  pageWidth,
+  pageHeight,
+}: TasmeeOverlayProps) {
   const overlayLines = useMemo(
     () => (pageData ? toOverlayLines(pageData) : []),
     [pageData],
   );
+  const [textBox, setTextBox] = useState<QuranTextBox>(() =>
+    getFallbackQuranTextBox(pageNumber),
+  );
 
-  if (!isLocked || !pageData) return null;
+  useEffect(() => {
+    let isActive = true;
+    setTextBox(getFallbackQuranTextBox(pageNumber));
+
+    resolveQuranTextBox(pageNumber).then((resolvedBox) => {
+      if (isActive) {
+        setTextBox(resolvedBox);
+      }
+    });
+
+    return () => {
+      isActive = false;
+    };
+  }, [pageNumber]);
+
+  const pageMarkerShift = useMemo(() => {
+    if (!pageWidth) return 0;
+    const isSpecialPage = pageNumber === 1 || pageNumber === 2;
+    const isEvenPage = pageNumber % 2 === 0;
+    const maskRatio = isSpecialPage
+      ? SPECIAL_CROP_RATIO
+      : isEvenPage
+        ? 1 - MARKER_CROP_RATIO_LEFT
+        : MARKER_CROP_RATIO_RIGHT;
+    const shiftBase = pageWidth * maskRatio * (
+      isEvenPage ? MARKER_SHIFT_RATIO_EVEN : MARKER_SHIFT_RATIO_ODD
+    );
+    const direction = isEvenPage ? -1 : 1;
+    return shiftBase * direction + MARKER_SHIFT_PIXEL_OFFSET;
+  }, [pageNumber, pageWidth]);
+
+  const layout = useMemo(() => {
+    if (!pageWidth || !pageHeight) return null;
+
+    const regionLeft = pageWidth * textBox.xRatio;
+    const regionTop = pageHeight * textBox.yRatio;
+    const regionWidth = pageWidth * textBox.widthRatio;
+    const regionHeight = pageHeight * textBox.heightRatio;
+    const lineSlotHeight = regionHeight / LINE_SLOT_COUNT;
+    const wordFontSize = Math.max(MIN_WORD_FONT_SIZE, lineSlotHeight * 0.53);
+    const markerFontSize = Math.max(12, wordFontSize * 0.88);
+    const lineHorizontalPadding = Math.max(2, regionWidth * 0.012);
+    const tokenHorizontalMargin = Math.max(1, lineSlotHeight * 0.035);
+    const maskRadius = Math.max(3, lineSlotHeight * 0.12);
+
+    return {
+      regionLeft,
+      regionTop,
+      regionWidth,
+      regionHeight,
+      lineSlotHeight,
+      wordFontSize,
+      markerFontSize,
+      lineHorizontalPadding,
+      tokenHorizontalMargin,
+      maskRadius,
+    };
+  }, [pageHeight, pageWidth, textBox]);
+
+  if (!isLocked || !pageData || !layout) return null;
+
+  const wordSpacerStyle = {
+    fontFamily: "UthmanicHafs" as const,
+    fontSize: layout.wordFontSize,
+    lineHeight: Math.round(layout.wordFontSize * 1.34),
+    color: "transparent" as const,
+    marginHorizontal: layout.tokenHorizontalMargin,
+  };
+
+  const markerSpacerStyle = {
+    fontFamily: "UthmanicHafs" as const,
+    fontSize: layout.markerFontSize,
+    lineHeight: Math.round(layout.markerFontSize * 1.3),
+    color: "transparent" as const,
+    marginHorizontal: layout.tokenHorizontalMargin,
+  };
+
+  const hiddenWordStyle = {
+    ...wordSpacerStyle,
+    backgroundColor: PAGE_BACKGROUND_COLOR,
+    borderRadius: layout.maskRadius,
+    paddingHorizontal: 2,
+    paddingVertical: 1,
+  };
 
   return (
     <View pointerEvents="none" style={styles.container}>
-      {overlayLines.map((line) => (
-        <View key={`line-${line.lineNumber}`} style={styles.line}>
-          {line.tokens.map((token, tokenIndex) => {
-            if (token.wordIndex == null || token.charType !== "word") {
-              return (
-                <Text
-                  key={`${line.lineNumber}-${tokenIndex}`}
-                  style={styles.markerSpacer}
-                >
-                  {token.text}
-                </Text>
-              );
-            }
+      <View
+        style={[
+          styles.textRegion,
+          {
+            left: layout.regionLeft,
+            top: layout.regionTop,
+            width: layout.regionWidth,
+            height: layout.regionHeight,
+            transform: [{ translateX: pageMarkerShift }],
+          },
+        ]}
+      >
+        {overlayLines.map((line) => {
+          const lineSlotIndex = Math.max(
+            0,
+            Math.min(LINE_SLOT_COUNT - 1, line.lineNumber - 1),
+          );
+          const lineTop = lineSlotIndex * layout.lineSlotHeight;
 
-            const state = wordStates[token.wordIndex] ?? "hidden_pending";
-            if (state === "hidden_pending") {
-              return (
-                <View
-                  key={`${line.lineNumber}-${tokenIndex}`}
-                  style={[
-                    styles.hiddenWord,
-                    {
-                      width: estimatePlaceholderWidth(token.text),
-                    },
-                  ]}
-                />
-              );
-            }
+          return (
+            <View
+              key={`line-${line.lineNumber}`}
+              style={[
+                styles.line,
+                {
+                  top: lineTop,
+                  height: layout.lineSlotHeight,
+                  paddingHorizontal: layout.lineHorizontalPadding,
+                },
+              ]}
+            >
+              {line.tokens.map((token, tokenIndex) => {
+                if (token.wordIndex == null || token.charType !== "word") {
+                  return (
+                    <Text
+                      key={`${line.lineNumber}-${tokenIndex}`}
+                      style={markerSpacerStyle}
+                    >
+                      {token.text}
+                    </Text>
+                  );
+                }
 
-            return (
-              <Text key={`${line.lineNumber}-${tokenIndex}`} style={styles.wordSpacer}>
-                {token.text}
-              </Text>
-            );
-          })}
-        </View>
-      ))}
+                const state = wordStates[token.wordIndex] ?? "hidden_pending";
+                return (
+                  <Text
+                    key={`${line.lineNumber}-${tokenIndex}`}
+                    style={
+                      state === "hidden_pending" ? hiddenWordStyle : wordSpacerStyle
+                    }
+                  >
+                    {token.text}
+                  </Text>
+                );
+              })}
+            </View>
+          );
+        })}
+      </View>
     </View>
   );
 }
@@ -107,42 +237,20 @@ function TasmeeOverlay({ pageData, isLocked, wordStates }: TasmeeOverlayProps) {
 const styles = StyleSheet.create({
   container: {
     ...StyleSheet.absoluteFillObject,
-    paddingHorizontal: 10,
-    paddingVertical: 12,
     backgroundColor: "transparent",
-    justifyContent: "center",
+  },
+  textRegion: {
+    position: "absolute",
   },
   line: {
+    position: "absolute",
+    left: 0,
+    right: 0,
     flexDirection: "row-reverse",
-    flexWrap: "wrap",
+    flexWrap: "nowrap",
     justifyContent: "flex-start",
     alignItems: "center",
-    marginBottom: 6,
-  },
-  wordSpacer: {
-    fontFamily: "UthmanicHafs",
-    fontSize: 19,
-    marginHorizontal: 2,
-    marginVertical: 2,
-    color: "transparent",
-  },
-  markerSpacer: {
-    fontFamily: "UthmanicHafs",
-    fontSize: 17,
-    color: "transparent",
-    marginHorizontal: 2,
-    marginVertical: 2,
-  },
-  hiddenWord: {
-    minWidth: 22,
-    height: 22,
-    borderRadius: 7,
-    borderWidth: 1,
-    borderColor: "#9FD2E7",
-    backgroundColor: "#BEE6F6",
-    marginHorizontal: 2,
-    marginVertical: 2,
-    opacity: 0.96,
+    overflow: "hidden",
   },
 });
 

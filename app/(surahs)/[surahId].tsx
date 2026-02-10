@@ -1,4 +1,5 @@
 // app/(surahs)/[surahId].tsx
+import { useAuth } from "@clerk/clerk-expo";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Asset } from "expo-asset";
@@ -16,6 +17,7 @@ import {
   Image,
   Keyboard,
   LayoutChangeEvent,
+  Modal,
   Pressable,
   ScrollView,
   Text,
@@ -37,6 +39,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import QuranPage from "../../components/QuranPage";
 import QuranPager from "../../components/QuranPager";
 import BookmarkModal from "../../components/BookmarkModal";
+import QuoteLongPressOverlay from "../../components/QuoteLongPressOverlay";
+import QuotePreviewModal from "../../components/QuotePreviewModal";
 import SurahCarousel from "../../components/SurahCarousel";
 import TasmeeOverlay from "../../components/TasmeeOverlay";
 import { LAST_READ_PAGE_KEY } from "../../constants/storage";
@@ -49,9 +53,8 @@ import {
   getSurahIdForPageNumber,
   type MushafPage,
 } from "../../utils/mushafData";
-import {
-  prefetchQuranPageSvgs,
-} from "../../utils/quranSvgRegistry";
+import type { QuoteVerseSelection } from "../../utils/quoteVerseMapping";
+import { prefetchQuranPageSvgs } from "../../utils/quranSvgRegistry";
 import { SearchResult } from "../../utils/searchUtils";
 import { toArabicNumber } from "../../utils/toArabicNumbers";
 
@@ -119,6 +122,7 @@ const getNearbyPages = (pageNumber: number, windowSize: number) =>
   );
 
 export default function SurahScreen() {
+  const { isLoaded: isAuthLoaded, isSignedIn, signOut } = useAuth();
   const {
     surahId,
     startAt,
@@ -148,9 +152,12 @@ export default function SurahScreen() {
   const [pageIndex, setPageIndex] = useState(initialIndex);
   const hasRestoredRef = useRef(false);
   const [isMini, setIsMini] = useState(false);
+  const [isMiniMenuOpen, setIsMiniMenuOpen] = useState(false);
   const [bookmarkIconXml, setBookmarkIconXml] = useState<string | null>(null);
   const [moonIconXml, setMoonIconXml] = useState<string | null>(null);
   const [isBookmarkModalOpen, setIsBookmarkModalOpen] = useState(false);
+  const [quoteSelection, setQuoteSelection] =
+    useState<QuoteVerseSelection | null>(null);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const windowDimensions = useWindowDimensions();
   const isLandscape = windowDimensions.width > windowDimensions.height;
@@ -167,6 +174,10 @@ export default function SurahScreen() {
   const setMiniMode = useCallback((next: boolean) => {
     setIsMini(next);
   }, []);
+
+  useEffect(() => {
+    if (!isMini) setIsMiniMenuOpen(false);
+  }, [isMini]);
 
   useEffect(() => {
     let isActive = true;
@@ -272,6 +283,13 @@ export default function SurahScreen() {
     pageNumber: currentPageNumber,
     surahId: id,
   });
+  const quoteFeatureEnabled = !isMini && !tasmee.isRunning;
+
+  useEffect(() => {
+    if (!quoteFeatureEnabled) {
+      setQuoteSelection(null);
+    }
+  }, [quoteFeatureEnabled]);
 
   useEffect(() => {
     if (isMini) {
@@ -413,15 +431,40 @@ export default function SurahScreen() {
       lastTapTimestamp.value = now;
     });
 
+  const handleQuoteDetected = useCallback((selection: QuoteVerseSelection) => {
+    setQuoteSelection(selection);
+  }, []);
+
+  const handleCloseQuotePreview = useCallback(() => {
+    setQuoteSelection(null);
+  }, []);
+
   const renderPage = useCallback(
-    ({ item }: { item: number }) => (
-      <QuranPage
-        pageNumber={item}
-        markerMaskProgress={markerMaskProgress}
-        pageWidth={pageSize.width}
-      />
-    ),
-    [markerMaskProgress, pageSize.width],
+    ({ item }: { item: number }) => {
+      return (
+        <View style={{ flex: 1 }}>
+          <QuranPage
+            pageNumber={item}
+            markerMaskProgress={markerMaskProgress}
+            pageWidth={pageSize.width}
+          />
+          <QuoteLongPressOverlay
+            pageNumber={item}
+            pageWidth={pageSize.width}
+            pageHeight={pageSize.height}
+            enabled={quoteFeatureEnabled}
+            onQuoteDetected={handleQuoteDetected}
+          />
+        </View>
+      );
+    },
+    [
+      handleQuoteDetected,
+      markerMaskProgress,
+      pageSize.height,
+      pageSize.width,
+      quoteFeatureEnabled,
+    ],
   );
 
   const getFirstPageIndexForSurah = useCallback((surahNumber: number) => {
@@ -437,7 +480,7 @@ export default function SurahScreen() {
       }
       setPageIndex(getFirstPageIndexForSurah(surahNumber));
       router.replace({
-        pathname: "/(surahs)/[surahId]",
+        pathname: "/[surahId]",
         params: {
           surahId: String(surahNumber),
           startAt: "first",
@@ -465,7 +508,7 @@ export default function SurahScreen() {
           setPageIndex(targetIndex);
         }
         router.replace({
-          pathname: "/(surahs)/[surahId]",
+          pathname: "/[surahId]",
           params: {
             surahId: String(result.surahId),
             page: String(result.pageNumber),
@@ -480,14 +523,7 @@ export default function SurahScreen() {
         setIsMini(false);
       }
     },
-    [
-      handleSelectSurah,
-      isMini,
-      miniModeValue,
-      router,
-      setQuery,
-      tasmee,
-    ],
+    [handleSelectSurah, isMini, miniModeValue, router, setQuery, tasmee],
   );
 
   const carouselIndex = Math.max(0, Math.min(SURAH_ITEMS.length - 1, id - 1));
@@ -532,6 +568,9 @@ export default function SurahScreen() {
         pageData={tasmee.pageData}
         wordStates={tasmee.wordStates}
         isLocked={tasmee.isLocked}
+        pageNumber={currentPageNumber}
+        pageWidth={pageSize.width}
+        pageHeight={pageSize.height}
       />
       {tasmee.isListeningForStart ? (
         <View
@@ -566,6 +605,42 @@ export default function SurahScreen() {
           </View>
         </View>
       ) : null}
+      {tasmee.status === "error" && tasmee.errorMessage ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            top: 14,
+            left: 0,
+            right: 0,
+            alignItems: "center",
+            paddingHorizontal: 14,
+          }}
+        >
+          <View
+            style={{
+              backgroundColor: "rgba(245, 225, 225, 0.98)",
+              borderWidth: 1,
+              borderColor: "#C56C6C",
+              borderRadius: 10,
+              paddingHorizontal: 12,
+              paddingVertical: 8,
+              maxWidth: "96%",
+            }}
+          >
+            <Text
+              style={{
+                color: "#7F2929",
+                fontSize: 12,
+                fontWeight: "600",
+                textAlign: "center",
+              }}
+            >
+              {tasmee.errorMessage}
+            </Text>
+          </View>
+        </View>
+      ) : null}
     </Animated.View>
   );
 
@@ -576,6 +651,86 @@ export default function SurahScreen() {
       edges={["top", "bottom"]}
     >
       <Stack.Screen options={{ headerShown: false }} />
+
+      <Modal
+        visible={isMiniMenuOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsMiniMenuOpen(false)}
+      >
+        <View className="flex-1">
+          <Pressable
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+            }}
+            onPress={() => setIsMiniMenuOpen(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Close menu"
+          >
+            <View className="flex-1 bg-black/40" />
+          </Pressable>
+
+          <View
+            className="flex-1 items-end pt-16 px-5"
+            pointerEvents="box-none"
+          >
+            <View className="w-64 rounded-2xl bg-[#FFFDF5] border border-[#E8E1D1] overflow-hidden">
+              <Pressable
+                onPress={() => {
+                  setIsMiniMenuOpen(false);
+                  router.push("/(profile)/profile");
+                }}
+                className="px-4 py-4 flex-row-reverse items-center gap-3 active:bg-[#F9F9F9]"
+                accessibilityRole="button"
+                accessibilityLabel="My profile"
+              >
+                <Ionicons name="person-outline" size={18} color="#2E8B57" />
+                <Text className="text-lg text-[#1F1F1F] font-semibold">
+                  Profile
+                </Text>
+              </Pressable>
+
+              <View className="h-px bg-[#E8E1D1]" />
+
+              {isAuthLoaded && isSignedIn ? (
+                <Pressable
+                  onPress={() => {
+                    setIsMiniMenuOpen(false);
+                    void signOut();
+                  }}
+                  className="px-4 py-4 flex-row-reverse items-center gap-3 active:bg-[#F9F9F9]"
+                  accessibilityRole="button"
+                  accessibilityLabel="Logout"
+                >
+                  <Ionicons name="log-out-outline" size={18} color="#2E8B57" />
+                  <Text className="text-lg text-[#1F1F1F] font-semibold">
+                    Logout
+                  </Text>
+                </Pressable>
+              ) : (
+                <Pressable
+                  onPress={() => {
+                    setIsMiniMenuOpen(false);
+                    router.push("/(auth)/sign-in");
+                  }}
+                  className="px-4 py-4 flex-row-reverse items-center gap-3 active:bg-[#F9F9F9]"
+                  accessibilityRole="button"
+                  accessibilityLabel="Sign in or sign up"
+                >
+                  <Ionicons name="log-in-outline" size={18} color="#2E8B57" />
+                  <Text className="text-lg text-[#1F1F1F] font-semibold">
+                    Sign In / Sign Up
+                  </Text>
+                </Pressable>
+              )}
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {isMini ? (
         <View
@@ -741,14 +896,18 @@ export default function SurahScreen() {
                       : void tasmee.startSession()
                   }
                   accessibilityRole="button"
-                  accessibilityLabel={tasmee.isRunning ? "Stop tasmee" : "Start tasmee"}
+                  accessibilityLabel={
+                    tasmee.isRunning ? "Stop tasmee" : "Start tasmee"
+                  }
                   style={({ pressed }) => ({
                     width: 34,
                     height: 34,
                     borderRadius: 17,
                     alignItems: "center",
                     justifyContent: "center",
-                    backgroundColor: tasmee.isRunning ? "#BB4A4A" : "transparent",
+                    backgroundColor: tasmee.isRunning
+                      ? "#BB4A4A"
+                      : "transparent",
                     opacity: pressed ? 0.8 : 1,
                   })}
                 >
@@ -757,7 +916,9 @@ export default function SurahScreen() {
                     style={{
                       width: 22,
                       height: 22,
-                      tintColor: tasmee.isRunning ? "#FFFFFF" : MUSHAF_ACCENT_DARK,
+                      tintColor: tasmee.isRunning
+                        ? "#FFFFFF"
+                        : MUSHAF_ACCENT_DARK,
                     }}
                     resizeMode="contain"
                   />
@@ -837,8 +998,11 @@ export default function SurahScreen() {
         onClose={handleCloseBookmarkModal}
         currentPageNumber={page?.pageNumber}
       />
+      <QuotePreviewModal
+        visible={quoteSelection != null}
+        quote={quoteSelection}
+        onClose={handleCloseQuotePreview}
+      />
     </SafeAreaView>
   );
 }
-
-

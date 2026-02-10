@@ -40,7 +40,7 @@ import QuranPage from "../../components/QuranPage";
 import QuranPager from "../../components/QuranPager";
 import BookmarkModal from "../../components/BookmarkModal";
 import SurahCarousel from "../../components/SurahCarousel";
-import TasmeeOverlay from "../../components/TasmeeOverlay";
+import TasmeePage from "../../components/TasmeePage";
 import { LAST_READ_PAGE_KEY } from "../../constants/storage";
 import { useTasmeeSession } from "../../hooks/useTasmeeSession";
 import { ARABIC_SURAHS } from "../../constants/surahNames";
@@ -513,6 +513,102 @@ export default function SurahScreen() {
     ? LANDSCAPE_BOTTOM_PADDING
     : PAGE_BOTTOM_PADDING;
 
+  const tasmeeStatusLabel = useMemo(() => {
+    switch (tasmee.feedbackState) {
+      case "reciting":
+        return "Reciting detected";
+      case "paused":
+        return "Paused after 10s silence. Tap mic to resume.";
+      case "silent":
+        return "No voice detected";
+      case "processing":
+        return "Checking your recitation...";
+      case "listening":
+      default:
+        return "Listening for your recitation...";
+    }
+  }, [tasmee.feedbackState]);
+
+  const tasmeeProgressLabel = `Correct ${tasmee.correctWordCount}/${tasmee.totalWordCount}`;
+  const tasmeeErrorBanner = tasmee.status === "error" && tasmee.errorMessage ? (
+    <View
+      pointerEvents="none"
+      style={{
+        position: "absolute",
+        top: 14,
+        left: 0,
+        right: 0,
+        alignItems: "center",
+      }}
+    >
+      <View
+        style={{
+          backgroundColor: "rgba(255, 236, 236, 0.98)",
+          borderWidth: 1,
+          borderColor: "#D79D9D",
+          borderRadius: 14,
+          paddingHorizontal: 12,
+          paddingVertical: 8,
+          maxWidth: "88%",
+        }}
+      >
+        <Text
+          style={{
+            color: "#6F1D1D",
+            fontSize: 12,
+            fontWeight: "600",
+            textAlign: "center",
+          }}
+        >
+          {tasmee.errorMessage}
+        </Text>
+      </View>
+    </View>
+  ) : null;
+
+  const listeningBanner = tasmee.isRunning ? (
+    <View
+      pointerEvents="none"
+      style={{
+        position: "absolute",
+        top: 14,
+        left: 0,
+        right: 0,
+        alignItems: "center",
+      }}
+    >
+      <View
+        style={{
+          backgroundColor: "rgba(226, 242, 250, 0.98)",
+          borderWidth: 1,
+          borderColor: "#9BC4D6",
+          borderRadius: 999,
+          paddingHorizontal: 14,
+          paddingVertical: 7,
+        }}
+      >
+        <Text
+          style={{
+            color: "#143441",
+            fontSize: 12,
+            fontWeight: "600",
+          }}
+        >
+          {tasmeeStatusLabel}
+        </Text>
+        <Text
+          style={{
+            color: "#2A5A6C",
+            fontSize: 11,
+            marginTop: 2,
+          }}
+        >
+          {tasmeeProgressLabel}
+        </Text>
+      </View>
+    </View>
+  ) : null;
+
   const pageContent = (
     <Animated.View
       style={[
@@ -526,54 +622,22 @@ export default function SurahScreen() {
       ]}
     >
       {pageSize.width > 0 && pageSize.height > 0 ? (
-        <QuranPager
-          data={PAGE_NUMBERS}
-          initialIndex={pageIndex}
-          onIndexChange={setPageIndex}
-          renderItem={renderPage}
-          scrollEnabled={!tasmee.isRunning}
-          pageWidth={pageSize.width}
-          simultaneousGestures={[pinch, doubleTap]}
-        />
+        tasmee.isRunning ? (
+          <TasmeePage pageData={tasmee.pageData} wordStates={tasmee.wordStates} />
+        ) : (
+          <QuranPager
+            data={PAGE_NUMBERS}
+            initialIndex={pageIndex}
+            onIndexChange={setPageIndex}
+            renderItem={renderPage}
+            scrollEnabled={!tasmee.isRunning}
+            pageWidth={pageSize.width}
+            simultaneousGestures={[pinch, doubleTap]}
+          />
+        )
       ) : null}
-      <TasmeeOverlay
-        pageData={tasmee.pageData}
-        wordStates={tasmee.wordStates}
-        isLocked={tasmee.isLocked}
-      />
-      {tasmee.isListeningForStart ? (
-        <View
-          pointerEvents="none"
-          style={{
-            position: "absolute",
-            top: 14,
-            left: 0,
-            right: 0,
-            alignItems: "center",
-          }}
-        >
-          <View
-            style={{
-              backgroundColor: "rgba(226, 242, 250, 0.98)",
-              borderWidth: 1,
-              borderColor: "#9BC4D6",
-              borderRadius: 999,
-              paddingHorizontal: 14,
-              paddingVertical: 7,
-            }}
-          >
-            <Text
-              style={{
-                color: "#143441",
-                fontSize: 12,
-                fontWeight: "600",
-              }}
-            >
-              Listening for your starting words...
-            </Text>
-          </View>
-        </View>
-      ) : null}
+      {listeningBanner}
+      {tasmeeErrorBanner}
     </Animated.View>
   );
 
@@ -815,19 +879,31 @@ export default function SurahScreen() {
                 ) : null}
                 <Pressable
                   onPress={() =>
-                    tasmee.isRunning
-                      ? void tasmee.stopSession()
-                      : void tasmee.startSession()
+                    !tasmee.isRunning
+                      ? void tasmee.startSession()
+                      : tasmee.isPaused
+                        ? void tasmee.resumeSession()
+                        : void tasmee.stopSession()
                   }
                   accessibilityRole="button"
-                  accessibilityLabel={tasmee.isRunning ? "Stop tasmee" : "Start tasmee"}
+                  accessibilityLabel={
+                    !tasmee.isRunning
+                      ? "Start tasmee"
+                      : tasmee.isPaused
+                        ? "Resume tasmee"
+                        : "Stop tasmee"
+                  }
                   style={({ pressed }) => ({
                     width: 34,
                     height: 34,
                     borderRadius: 17,
                     alignItems: "center",
                     justifyContent: "center",
-                    backgroundColor: tasmee.isRunning ? "#BB4A4A" : "transparent",
+                    backgroundColor: !tasmee.isRunning
+                      ? "transparent"
+                      : tasmee.isPaused
+                        ? "#D28C2E"
+                        : "#BB4A4A",
                     opacity: pressed ? 0.8 : 1,
                   })}
                 >
@@ -870,14 +946,25 @@ export default function SurahScreen() {
               }}
             >
               {pageSize.width > 0 && pageSize.height > 0 ? (
-                <QuranPager
-                  data={PAGE_NUMBERS}
-                  initialIndex={pageIndex}
-                  onIndexChange={setPageIndex}
-                  renderItem={renderPage}
-                  scrollEnabled={!tasmee.isRunning}
-                  pageWidth={pageSize.width}
-                />
+                tasmee.isRunning ? (
+                  <View style={{ flex: 1 }}>
+                    <TasmeePage
+                      pageData={tasmee.pageData}
+                      wordStates={tasmee.wordStates}
+                    />
+                    {listeningBanner}
+                    {tasmeeErrorBanner}
+                  </View>
+                ) : (
+                  <QuranPager
+                    data={PAGE_NUMBERS}
+                    initialIndex={pageIndex}
+                    onIndexChange={setPageIndex}
+                    renderItem={renderPage}
+                    scrollEnabled={!tasmee.isRunning}
+                    pageWidth={pageSize.width}
+                  />
+                )
               ) : null}
             </View>
           </ScrollView>

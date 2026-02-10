@@ -1,15 +1,21 @@
 import { Platform } from "react-native";
 
 import type {
+  TasmeeChunkUploadRequest,
+  TasmeeChunkUploadResponse,
   TasmeeFeedbackDeltaEvent,
   TasmeeSessionCreateRequest,
   TasmeeSessionCreateResponse,
+  TasmeeSessionResumeResponse,
+  TasmeeSessionStatusEvent,
+  TasmeeWsEvent,
 } from "../types/tasmee";
 
 type TokenProvider = (() => Promise<string | null>) | undefined;
 
 type TasmeeSocketHandlers = {
   onDelta: (event: TasmeeFeedbackDeltaEvent) => void;
+  onStatus?: (event: TasmeeSessionStatusEvent) => void;
   onClose?: () => void;
   onError?: (error: Error) => void;
 };
@@ -19,6 +25,7 @@ export interface TasmeeSocketConnection {
   isOpen: () => boolean;
 }
 
+const rawTasmeeBaseUrl = process.env.EXPO_PUBLIC_TASMEE_API_URL?.trim() ?? "";
 const rawApiBaseUrl = process.env.EXPO_PUBLIC_API_URL?.trim() ?? "";
 
 const normalizeApiBaseUrl = (baseUrl: string): string => {
@@ -42,8 +49,9 @@ const normalizeApiBaseUrl = (baseUrl: string): string => {
 };
 
 const getApiBaseUrl = () => {
-  if (!rawApiBaseUrl) return null;
-  return normalizeApiBaseUrl(rawApiBaseUrl);
+  const selected = rawTasmeeBaseUrl || rawApiBaseUrl;
+  if (!selected) return null;
+  return normalizeApiBaseUrl(selected);
 };
 
 const toWebSocketBase = (httpBaseUrl: string) => {
@@ -99,7 +107,7 @@ export const createTasmeeSession = async (
 ): Promise<TasmeeSessionCreateResponse> => {
   const baseUrl = getApiBaseUrl();
   if (!baseUrl) {
-    throw new Error("Missing EXPO_PUBLIC_API_URL");
+    throw new Error("Missing EXPO_PUBLIC_TASMEE_API_URL or EXPO_PUBLIC_API_URL");
   }
 
   const response = await fetch(`${baseUrl}/v1/tasmee/sessions`, {
@@ -151,12 +159,56 @@ export const stopTasmeeSession = async (
   }
 };
 
-const parseFeedbackDeltaEvent = (payload: string) => {
-  const parsed = JSON.parse(payload) as Partial<TasmeeFeedbackDeltaEvent>;
-  if (parsed.type !== "feedback.delta") return null;
-  if (!parsed.session_id || typeof parsed.session_id !== "string") return null;
+export const resumeTasmeeSession = async (
+  sessionId: string,
+  tokenProvider?: TokenProvider,
+): Promise<TasmeeSessionResumeResponse> => {
+  const baseUrl = getApiBaseUrl();
+  if (!baseUrl) {
+    throw new Error("Missing EXPO_PUBLIC_TASMEE_API_URL or EXPO_PUBLIC_API_URL");
+  }
 
-  return parsed as TasmeeFeedbackDeltaEvent;
+  const response = await fetch(
+    `${baseUrl}/v1/tasmee/sessions/${encodeURIComponent(sessionId)}/resume`,
+    {
+      method: "POST",
+      headers: await buildHeaders(tokenProvider, true),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response));
+  }
+
+  const body = (await response.json()) as Partial<TasmeeSessionResumeResponse>;
+  if (typeof body.session_id !== "string" || body.status !== "resumed") {
+    throw new Error("Invalid tasmee resume response");
+  }
+  return {
+    session_id: body.session_id,
+    status: "resumed",
+  };
+};
+
+const parseFeedbackDeltaEvent = (payload: string) => {
+  const parsed = JSON.parse(payload) as Partial<TasmeeWsEvent>;
+  if (!parsed || typeof parsed !== "object") return null;
+  if (!parsed.session_id || typeof parsed.session_id !== "string") return null;
+  if (parsed.type === "feedback.delta") {
+    return parsed as TasmeeFeedbackDeltaEvent;
+  }
+  if (parsed.type === "session.status") {
+    if (
+      parsed.state === "listening" ||
+      parsed.state === "reciting" ||
+      parsed.state === "silent" ||
+      parsed.state === "paused" ||
+      parsed.state === "processing"
+    ) {
+      return parsed as TasmeeSessionStatusEvent;
+    }
+  }
+  return null;
 };
 
 export const openTasmeeSocket = (
@@ -174,7 +226,13 @@ export const openTasmeeSocket = (
     try {
       const delta = parseFeedbackDeltaEvent(event.data);
       if (!delta) return;
-      handlers.onDelta(delta);
+      if (delta.type === "feedback.delta") {
+        handlers.onDelta(delta);
+        return;
+      }
+      if (handlers.onStatus) {
+        handlers.onStatus(delta);
+      }
     } catch (error) {
       if (handlers.onError) {
         handlers.onError(
@@ -205,5 +263,48 @@ export const openTasmeeSocket = (
       }
     },
     isOpen: () => socket.readyState === WebSocket.OPEN,
+  };
+};
+
+export const uploadTasmeeChunk = async (
+  sessionId: string,
+  payload: TasmeeChunkUploadRequest,
+  session?: Pick<TasmeeSessionCreateResponse, "fallback_url"> | null,
+  tokenProvider?: TokenProvider,
+): Promise<TasmeeChunkUploadResponse> => {
+  const baseUrl = getApiBaseUrl();
+  if (!baseUrl) {
+    throw new Error("Missing EXPO_PUBLIC_TASMEE_API_URL or EXPO_PUBLIC_API_URL");
+  }
+
+  const fallbackUrl =
+    typeof session?.fallback_url === "string" && session.fallback_url.length > 0
+      ? session.fallback_url
+      : `${baseUrl}/v1/tasmee/sessions/${encodeURIComponent(sessionId)}/chunks`;
+
+  const response = await fetch(fallbackUrl, {
+    method: "POST",
+    headers: await buildHeaders(tokenProvider, true),
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response));
+  }
+
+  const body = (await response.json()) as Partial<TasmeeChunkUploadResponse>;
+  if (
+    typeof body.session_id !== "string" ||
+    !Number.isFinite(body.seq_ack) ||
+    typeof body.accepted !== "boolean"
+  ) {
+    throw new Error("Invalid tasmee chunk response");
+  }
+
+  const seqAck = Number(body.seq_ack);
+  return {
+    session_id: body.session_id,
+    seq_ack: seqAck,
+    accepted: body.accepted,
   };
 };

@@ -3,32 +3,80 @@ import test from "node:test";
 
 import { applyFeedbackDelta, buildTasmeeWordStates } from "./tasmeeState";
 
-test("mid-page anchor keeps pre-anchor words visible", () => {
-  const states = buildTasmeeWordStates(8, 3, [3, 4, 6]);
+test("session starts fully hidden", () => {
+  const states = buildTasmeeWordStates(5, null, []);
   assert.deepEqual(states, [
-    "visible_static",
-    "visible_static",
-    "visible_static",
-    "revealed_correct",
-    "revealed_correct",
     "hidden_pending",
-    "revealed_correct",
     "hidden_pending",
-  ]);
-});
-
-test("anchor at first word hides all pending words after index 0", () => {
-  const states = buildTasmeeWordStates(5, 0, [0, 1]);
-  assert.deepEqual(states, [
-    "revealed_correct",
-    "revealed_correct",
     "hidden_pending",
     "hidden_pending",
     "hidden_pending",
   ]);
 });
 
-test("low-confidence anchor is rejected and page remains visible", () => {
+test("first mid-page anchor auto-reveals words before it", () => {
+  const next = applyFeedbackDelta(
+    {
+      anchorWordIndex: null,
+      revealedWordIndexes: [],
+    },
+    {
+      type: "feedback.delta",
+      session_id: "s-1",
+      start_anchor_word_index: 3,
+      start_anchor_confidence: 0.95,
+      confirmed_word_indexes: [3],
+    },
+    8,
+  );
+
+  assert.equal(next.anchorWordIndex, 3);
+  assert.deepEqual(next.revealedWordIndexes, [0, 1, 2, 3]);
+
+  const states = buildTasmeeWordStates(8, next.anchorWordIndex, next.revealedWordIndexes);
+  assert.deepEqual(states, [
+    "revealed_correct",
+    "revealed_correct",
+    "revealed_correct",
+    "revealed_correct",
+    "hidden_pending",
+    "hidden_pending",
+    "hidden_pending",
+    "hidden_pending",
+  ]);
+});
+
+test("confirmed indexes continue revealing monotonically after first anchor", () => {
+  const initial = applyFeedbackDelta(
+    {
+      anchorWordIndex: null,
+      revealedWordIndexes: [],
+    },
+    {
+      type: "feedback.delta",
+      session_id: "s-1",
+      start_anchor_word_index: 2,
+      start_anchor_confidence: 0.92,
+      confirmed_word_indexes: [2],
+    },
+    10,
+  );
+
+  const next = applyFeedbackDelta(
+    initial,
+    {
+      type: "feedback.delta",
+      session_id: "s-1",
+      confirmed_word_indexes: [4, 5],
+    },
+    10,
+  );
+
+  assert.equal(next.anchorWordIndex, 2);
+  assert.deepEqual(next.revealedWordIndexes, [0, 1, 2, 4, 5]);
+});
+
+test("low-confidence start anchor can fallback to confirmed index", () => {
   const next = applyFeedbackDelta(
     {
       anchorWordIndex: null,
@@ -45,11 +93,11 @@ test("low-confidence anchor is rejected and page remains visible", () => {
     0.72,
   );
 
-  assert.equal(next.anchorWordIndex, null);
-  assert.deepEqual(next.revealedWordIndexes, [6]);
+  assert.equal(next.anchorWordIndex, 6);
+  assert.deepEqual(next.revealedWordIndexes, [0, 1, 2, 3, 4, 5, 6]);
 });
 
-test("anchor shift is rejected after first lock", () => {
+test("out-of-range confirmed indexes are clamped and merged", () => {
   const initial = applyFeedbackDelta(
     {
       anchorWordIndex: null,
@@ -58,25 +106,23 @@ test("anchor shift is rejected after first lock", () => {
     {
       type: "feedback.delta",
       session_id: "s-1",
-      start_anchor_word_index: 10,
+      start_anchor_word_index: 1,
       start_anchor_confidence: 0.91,
-      confirmed_word_indexes: [10],
+      confirmed_word_indexes: [1],
     },
-    40,
+    6,
   );
 
-  const shifted = applyFeedbackDelta(
+  const next = applyFeedbackDelta(
     initial,
     {
       type: "feedback.delta",
       session_id: "s-1",
-      start_anchor_word_index: 3,
-      start_anchor_confidence: 0.95,
-      confirmed_word_indexes: [11],
+      confirmed_word_indexes: [-4, 99],
     },
-    40,
+    6,
   );
 
-  assert.equal(shifted.anchorWordIndex, 10);
-  assert.deepEqual(shifted.revealedWordIndexes, [10, 11]);
+  assert.equal(next.anchorWordIndex, 1);
+  assert.deepEqual(next.revealedWordIndexes, [0, 1, 5]);
 });

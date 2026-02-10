@@ -21,6 +21,7 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
 1. Copy `.env.example` to `.env`
 2. Set `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` to your Clerk publishable key
 3. Set `EXPO_PUBLIC_API_URL` (example: `http://localhost:8000`)
+4. Optional for split deployment: set `EXPO_PUBLIC_TASMEE_API_URL` to a separate Tasmee service URL.
 
 > Android emulator note: if you use `http://localhost:8000`, the app automatically rewrites it to `http://10.0.2.2:8000` on Android.
 
@@ -53,6 +54,28 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
    ```bash
    python -m uvicorn api.app.main:app --reload --port 8000
    ```
+
+## Tasmee Service (Standalone, Cloud Run Safe)
+
+This repo includes a standalone Tasmee service entrypoint that does not touch profile backend routes:
+
+```bash
+python -m uvicorn api.app.tasmee_main:app --reload --port 8080
+```
+
+Key Tasmee env flags (`api/.env.example`):
+
+- `TASMEE_RECOGNIZER_MODE=heuristic|google`
+- `TASMEE_RECOGNIZER_SHADOW=true|false`
+- `TASMEE_GOOGLE_RECOGNIZER` (required for `google` mode)
+- `TASMEE_HARD_SPEECH_LEVEL_DB_THRESHOLD` (default `-35`)
+- `TASMEE_PAUSE_SILENCE_SECONDS` (default `10`)
+
+Cloud Run deploy script:
+
+```powershell
+./api/scripts/deploy_tasmee_cloud_run.ps1 -ProjectId <your-project-id> -Region me-central1
+```
 
 ## Database (Postgres)
 

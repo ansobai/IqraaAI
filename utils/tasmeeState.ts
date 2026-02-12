@@ -54,18 +54,12 @@ export const resolveAnchorFromConfirmedWordIndexes = (
 export const mergeRevealedWordIndexes = (
   currentIndexes: number[],
   incomingIndexes: number[] | undefined,
-  anchorWordIndex: number | null,
+  _anchorWordIndex: number | null,
   totalWordCount: number,
 ) => {
   if (totalWordCount <= 0) return currentIndexes;
 
   const nextSet = new Set<number>(currentIndexes);
-
-  if (anchorWordIndex != null) {
-    for (let wordIndex = 0; wordIndex <= anchorWordIndex; wordIndex += 1) {
-      nextSet.add(wordIndex);
-    }
-  }
 
   normalizeIncomingIndexes(incomingIndexes, totalWordCount).forEach(
     (normalized) => {

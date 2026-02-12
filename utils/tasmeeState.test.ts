@@ -14,7 +14,7 @@ test("session starts fully hidden", () => {
   ]);
 });
 
-test("first mid-page anchor auto-reveals words before it", () => {
+test("first mid-page anchor does not auto-reveal words before it", () => {
   const next = applyFeedbackDelta(
     {
       anchorWordIndex: null,
@@ -31,13 +31,13 @@ test("first mid-page anchor auto-reveals words before it", () => {
   );
 
   assert.equal(next.anchorWordIndex, 3);
-  assert.deepEqual(next.revealedWordIndexes, [0, 1, 2, 3]);
+  assert.deepEqual(next.revealedWordIndexes, [3]);
 
   const states = buildTasmeeWordStates(8, next.anchorWordIndex, next.revealedWordIndexes);
   assert.deepEqual(states, [
-    "revealed_correct",
-    "revealed_correct",
-    "revealed_correct",
+    "hidden_pending",
+    "hidden_pending",
+    "hidden_pending",
     "revealed_correct",
     "hidden_pending",
     "hidden_pending",
@@ -73,7 +73,7 @@ test("confirmed indexes continue revealing monotonically after first anchor", ()
   );
 
   assert.equal(next.anchorWordIndex, 2);
-  assert.deepEqual(next.revealedWordIndexes, [0, 1, 2, 4, 5]);
+  assert.deepEqual(next.revealedWordIndexes, [2, 4, 5]);
 });
 
 test("low-confidence start anchor can fallback to confirmed index", () => {
@@ -94,7 +94,7 @@ test("low-confidence start anchor can fallback to confirmed index", () => {
   );
 
   assert.equal(next.anchorWordIndex, 6);
-  assert.deepEqual(next.revealedWordIndexes, [0, 1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(next.revealedWordIndexes, [6]);
 });
 
 test("out-of-range confirmed indexes are clamped and merged", () => {

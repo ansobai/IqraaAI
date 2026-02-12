@@ -16,7 +16,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .tasmee_alignment import align_recitation
-from .tasmee_engine import ChunkRecognitionInput, create_tasmee_recognizer
+from .tasmee_engine import (
+    BaseTasmeeRecognizer,
+    ChunkRecognitionInput,
+    ChunkRecognitionResult,
+    create_tasmee_recognizer,
+)
+from .tasmee_matching import (
+    best_reference_prefix_match,
+    build_verse_spans,
+    find_best_verse_span_match,
+    merge_recited_tokens,
+)
 from .tasmee_page_lexicon import load_page_lexicon
 
 logger = logging.getLogger(__name__)
@@ -65,6 +76,10 @@ PAUSE_AFTER_SILENCE_SECONDS = _float_env("TASMEE_PAUSE_SILENCE_SECONDS", 10.0)
 ANCHOR_MIN_WORDS = max(1, _int_env("TASMEE_ANCHOR_MIN_WORDS", 3))
 RECOGNIZER_MODE = (os.getenv("TASMEE_RECOGNIZER_MODE") or "heuristic").strip().lower() or "heuristic"
 RECOGNIZER_SHADOW = _bool_env("TASMEE_RECOGNIZER_SHADOW", False)
+VERSE_MATCH_THRESHOLD = _float_env("TASMEE_VERSE_MATCH_THRESHOLD", 0.90)
+MATCH_SLACK = max(0, _int_env("TASMEE_MATCH_SLACK", 2))
+MAX_TOKEN_BUFFER = max(1, _int_env("TASMEE_MAX_TOKEN_BUFFER", 256))
+MAX_ANCHOR_TOKENS = max(1, _int_env("TASMEE_MAX_ANCHOR_TOKENS", 16))
 
 
 class TasmeeSessionCreateRequest(BaseModel):
@@ -124,8 +139,11 @@ class SessionState:
     paused_at: float | None = None
     recitation_state: str = "awaiting_anchor"
     anchor_word_index: int | None = None
+    anchor_verse_end_word_index: int | None = None
     page_words: list[str] = field(default_factory=list)
     verse_start_word_indexes: list[int] = field(default_factory=list)
+    verse_spans: list[tuple[int, int]] = field(default_factory=list)
+    recited_tokens: list[str] = field(default_factory=list)
     recognizer_mode: str = "heuristic"
     shadow_mode: bool = False
     listeners: set[asyncio.Queue[dict]] = field(default_factory=set, repr=False)
@@ -133,12 +151,15 @@ class SessionState:
 
 
 class SessionStore:
-    def __init__(self):
+    def __init__(self, recognizer_mode: str = "heuristic", shadow_mode: bool = False):
         self._sessions: Dict[str, SessionState] = {}
         self._lock = asyncio.Lock()
+        self._recognizer_mode = recognizer_mode
+        self._shadow_mode = shadow_mode
 
     async def create(self, page_number: int, surah_id: int) -> str:
         lexicon = load_page_lexicon(page_number)
+        spans = build_verse_spans(len(lexicon.words), lexicon.verse_start_word_indexes)
 
         async with self._lock:
             self._prune_locked(max_age_seconds=3600)
@@ -149,8 +170,9 @@ class SessionStore:
                 created_at=time.time(),
                 page_words=lexicon.words,
                 verse_start_word_indexes=lexicon.verse_start_word_indexes,
-                recognizer_mode=RECOGNIZER_MODE,
-                shadow_mode=RECOGNIZER_SHADOW and RECOGNIZER_MODE != "google",
+                verse_spans=spans,
+                recognizer_mode=self._recognizer_mode,
+                shadow_mode=self._shadow_mode,
             )
             return session_id
 
@@ -212,15 +234,6 @@ class SessionStore:
         ]
         for session_id in expired:
             self._sessions.pop(session_id, None)
-
-
-store = SessionStore()
-recognizer = create_tasmee_recognizer(RECOGNIZER_MODE)
-shadow_recognizer = (
-    create_tasmee_recognizer("google")
-    if RECOGNIZER_SHADOW and RECOGNIZER_MODE != "google"
-    else None
-)
 
 
 def _parse_cors_origins() -> list[str]:
@@ -313,38 +326,107 @@ def _hard_speech_gate(payload: TasmeeChunkUploadRequest) -> bool:
     return payload.level_db >= HARD_SPEECH_LEVEL_DB_THRESHOLD
 
 
-def _apply_progress_from_recognition(
-    session: SessionState,
-    recognition,
-) -> tuple[list[int], int | None, float | None]:
-    if session.recognizer_mode == "google":
-        awaiting_anchor = session.recitation_state != "tracking"
-        alignment = align_recitation(
-            page_words=session.page_words,
-            verse_start_word_indexes=session.verse_start_word_indexes,
-            spoken_words=recognition.recognized_tokens,
-            next_word_index=session.next_word_index,
-            awaiting_anchor=awaiting_anchor,
-            min_anchor_words=ANCHOR_MIN_WORDS,
+@dataclass(frozen=True)
+class ProgressUpdate:
+    confirmed_word_indexes: list[int]
+    confidence: float
+    start_anchor_word_index: int | None = None
+    start_anchor_confidence: float | None = None
+
+
+def _is_alignment_mode(mode: str) -> bool:
+    return mode.strip().lower() in {"google", "remote"}
+
+
+def _apply_alignment_progress(session: SessionState, recognition: ChunkRecognitionResult) -> ProgressUpdate:
+    if recognition.recognized_tokens:
+        effective_max_tokens = max(MAX_TOKEN_BUFFER, len(session.page_words) + 32)
+        session.recited_tokens = merge_recited_tokens(
+            session.recited_tokens,
+            recognition.recognized_tokens,
+            max_overlap=8,
+            max_tokens=effective_max_tokens,
         )
 
-        if alignment.start_anchor_word_index is not None:
-            session.anchor_set = True
-            session.anchor_word_index = alignment.start_anchor_word_index
-            session.recitation_state = "tracking"
+    if not session.page_words or not session.recited_tokens:
+        return ProgressUpdate(confirmed_word_indexes=[], confidence=0.0)
 
-        if alignment.confirmed_word_indexes:
-            session.next_word_index = alignment.confirmed_word_indexes[-1] + 1
+    start_anchor_word_index: int | None = None
+    start_anchor_confidence: float | None = None
 
-        start_anchor_confidence = (
-            recognition.confidence if alignment.start_anchor_word_index is not None else None
+    if session.recitation_state != "tracking":
+        anchor_spoken = session.recited_tokens[:MAX_ANCHOR_TOKENS]
+        if len(anchor_spoken) < ANCHOR_MIN_WORDS:
+            return ProgressUpdate(confirmed_word_indexes=[], confidence=0.0)
+
+        anchor_start, anchor_end, anchor_match = find_best_verse_span_match(
+            session.page_words,
+            session.verse_spans,
+            anchor_spoken,
+            slack=MATCH_SLACK,
         )
-        return (
-            alignment.confirmed_word_indexes,
-            alignment.start_anchor_word_index,
-            start_anchor_confidence,
+
+        if (
+            anchor_start is None
+            or anchor_end is None
+            or anchor_match.score < VERSE_MATCH_THRESHOLD
+            or anchor_match.matched_reference_words < ANCHOR_MIN_WORDS
+        ):
+            return ProgressUpdate(
+                confirmed_word_indexes=[],
+                confidence=anchor_match.score,
+            )
+
+        session.anchor_set = True
+        session.anchor_word_index = anchor_start
+        session.anchor_verse_end_word_index = anchor_end
+        session.recitation_state = "tracking"
+        session.next_word_index = anchor_start
+
+        start_anchor_word_index = anchor_start
+        start_anchor_confidence = anchor_match.score
+
+    anchor_start = session.anchor_word_index
+    if (
+        anchor_start is None
+        or anchor_start < 0
+        or anchor_start >= len(session.page_words)
+    ):
+        return ProgressUpdate(confirmed_word_indexes=[], confidence=0.0)
+
+    reference_words = session.page_words[anchor_start:]
+    match = best_reference_prefix_match(reference_words, session.recited_tokens, slack=MATCH_SLACK)
+    confidence = match.score
+    if confidence < VERSE_MATCH_THRESHOLD:
+        return ProgressUpdate(
+            confirmed_word_indexes=[],
+            confidence=confidence,
+            start_anchor_word_index=start_anchor_word_index,
+            start_anchor_confidence=start_anchor_confidence,
         )
 
+    candidate_next = min(anchor_start + match.matched_reference_words, len(session.page_words))
+    old_next = max(anchor_start, session.next_word_index)
+    new_next = max(old_next, candidate_next)
+    confirmed = list(range(old_next, new_next))
+    if not confirmed:
+        return ProgressUpdate(
+            confirmed_word_indexes=[],
+            confidence=confidence,
+            start_anchor_word_index=start_anchor_word_index,
+            start_anchor_confidence=start_anchor_confidence,
+        )
+
+    session.next_word_index = new_next
+    return ProgressUpdate(
+        confirmed_word_indexes=confirmed,
+        confidence=confidence,
+        start_anchor_word_index=start_anchor_word_index,
+        start_anchor_confidence=start_anchor_confidence,
+    )
+
+
+def _apply_heuristic_progress(session: SessionState, recognition: ChunkRecognitionResult) -> ProgressUpdate:
     if recognition.start_anchor_word_index is not None:
         session.anchor_set = True
         session.anchor_word_index = recognition.start_anchor_word_index
@@ -354,14 +436,28 @@ def _apply_progress_from_recognition(
     if confirmed:
         session.next_word_index = confirmed[-1] + 1
 
-    return (
-        confirmed,
-        recognition.start_anchor_word_index,
-        recognition.start_anchor_confidence,
+    return ProgressUpdate(
+        confirmed_word_indexes=confirmed,
+        confidence=recognition.confidence,
+        start_anchor_word_index=recognition.start_anchor_word_index,
+        start_anchor_confidence=recognition.start_anchor_confidence,
     )
 
 
-def _apply_shadow_recognition(session: SessionState, payload: ChunkRecognitionInput) -> None:
+def _apply_progress_from_recognition(
+    session: SessionState,
+    recognition: ChunkRecognitionResult,
+) -> ProgressUpdate:
+    if _is_alignment_mode(session.recognizer_mode):
+        return _apply_alignment_progress(session, recognition)
+    return _apply_heuristic_progress(session, recognition)
+
+
+def _apply_shadow_recognition(
+    session: SessionState,
+    payload: ChunkRecognitionInput,
+    shadow_recognizer: BaseTasmeeRecognizer | None,
+) -> None:
     if not session.shadow_mode or shadow_recognizer is None:
         return
 
@@ -408,8 +504,33 @@ def _pause_session_for_silence(session: SessionState, now: float) -> bool:
     return True
 
 
-def create_app() -> FastAPI:
+def create_app(
+    recognizer_override: BaseTasmeeRecognizer | None = None,
+    recognizer_mode_override: str | None = None,
+    shadow_recognizer_override: BaseTasmeeRecognizer | None = None,
+) -> FastAPI:
     app = FastAPI(title="IqraaAI Tasmee Service")
+
+    recognizer_mode = (recognizer_mode_override or RECOGNIZER_MODE).strip().lower() or "heuristic"
+    shadow_mode = (
+        bool(shadow_recognizer_override)
+        if shadow_recognizer_override is not None
+        else (RECOGNIZER_SHADOW and recognizer_mode != "google")
+    )
+    store = SessionStore(
+        recognizer_mode=recognizer_mode,
+        shadow_mode=shadow_mode,
+    )
+    recognizer = recognizer_override or create_tasmee_recognizer(recognizer_mode)
+    shadow_recognizer = (
+        shadow_recognizer_override
+        if shadow_recognizer_override is not None
+        else (
+            create_tasmee_recognizer("google")
+            if shadow_mode and recognizer_mode != "google"
+            else None
+        )
+    )
 
     cors_origins = _parse_cors_origins()
     app.add_middleware(
@@ -471,6 +592,7 @@ def create_app() -> FastAPI:
                 else:
                     recognition_input = ChunkRecognitionInput(
                         audio_bytes=audio_bytes,
+                        mime_type=payload.mime_type,
                         level_db=payload.level_db,
                         has_speech=payload.has_speech,
                         duration_ms=payload.duration_ms,
@@ -479,7 +601,7 @@ def create_app() -> FastAPI:
                     )
 
                     recognition = recognizer.analyze_chunk(recognition_input)
-                    _apply_shadow_recognition(session, recognition_input)
+                    _apply_shadow_recognition(session, recognition_input, shadow_recognizer)
 
                     hard_gate_open = _hard_speech_gate(payload)
                     if hard_gate_open:
@@ -487,7 +609,9 @@ def create_app() -> FastAPI:
                         session.last_speech_ts = now
                         session.chunks_with_speech += 1
 
-                        if recognition.confidence < CONFIDENCE_THRESHOLD:
+                        alignment_mode = _is_alignment_mode(session.recognizer_mode)
+
+                        if not alignment_mode and recognition.confidence < CONFIDENCE_THRESHOLD:
                             session.deltas_blocked_by_gate += 1
                             status_event = _build_status_event(
                                 session_id=session_id,
@@ -497,13 +621,12 @@ def create_app() -> FastAPI:
                                 level_db=recognition.level_db,
                             )
                         else:
-                            (
-                                confirmed_word_indexes,
-                                start_anchor_word_index,
-                                start_anchor_confidence,
-                            ) = _apply_progress_from_recognition(session, recognition)
+                            progress = _apply_progress_from_recognition(session, recognition)
+                            min_confidence = (
+                                VERSE_MATCH_THRESHOLD if alignment_mode else CONFIDENCE_THRESHOLD
+                            )
 
-                            if confirmed_word_indexes:
+                            if progress.confirmed_word_indexes and progress.confidence >= min_confidence:
                                 accepted = True
                                 session.deltas_emitted += 1
                                 status_event = _build_status_event(
@@ -519,13 +642,13 @@ def create_app() -> FastAPI:
                                     "seq_ack": session.last_seq_ack,
                                     "chunk_seq": payload.seq,
                                     "has_speech": True,
-                                    "confidence": recognition.confidence,
-                                    "confirmed_word_indexes": confirmed_word_indexes,
+                                    "confidence": progress.confidence,
+                                    "confirmed_word_indexes": progress.confirmed_word_indexes,
                                     "ts_ms": _now_ms(),
                                 }
-                                if start_anchor_word_index is not None:
-                                    delta_event["start_anchor_word_index"] = start_anchor_word_index
-                                    delta_event["start_anchor_confidence"] = start_anchor_confidence
+                                if progress.start_anchor_word_index is not None:
+                                    delta_event["start_anchor_word_index"] = progress.start_anchor_word_index
+                                    delta_event["start_anchor_confidence"] = progress.start_anchor_confidence
                             else:
                                 session.deltas_blocked_by_gate += 1
                                 status_event = _build_status_event(

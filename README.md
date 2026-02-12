@@ -65,9 +65,10 @@ python -m uvicorn api.app.tasmee_main:app --reload --port 8080
 
 Key Tasmee env flags (`api/.env.example`):
 
-- `TASMEE_RECOGNIZER_MODE=heuristic|google`
+- `TASMEE_RECOGNIZER_MODE=heuristic|google|remote`
 - `TASMEE_RECOGNIZER_SHADOW=true|false`
 - `TASMEE_GOOGLE_RECOGNIZER` (required for `google` mode)
+- `TASMEE_REMOTE_STT_URL` (required for `remote` mode)
 - `TASMEE_HARD_SPEECH_LEVEL_DB_THRESHOLD` (default `-35`)
 - `TASMEE_PAUSE_SILENCE_SECONDS` (default `10`)
 

@@ -10,6 +10,8 @@ export type TasmeeAudioChunk = {
   levelDb: number | null;
   hasSpeech: boolean | null;
   timestampMs: number;
+  chunkStartedAtMs: number;
+  chunkEndedAtMs: number;
 };
 
 export type TasmeeSpeechActivity = {
@@ -27,10 +29,19 @@ type UseTasmeeAudioStreamArgs = {
   onError?: (error: Error) => void;
   chunkDurationMs?: number;
   speechLevelDbThreshold?: number;
+  enableAutoCalibration?: boolean;
+  calibrationDurationMs?: number;
+  calibrationMarginDb?: number;
+  calibrationMinThresholdDb?: number;
+  calibrationMaxThresholdDb?: number;
 };
 
 const DEFAULT_CHUNK_DURATION_MS = 1000;
 const DEFAULT_SPEECH_LEVEL_DB_THRESHOLD = -48;
+const DEFAULT_CALIBRATION_DURATION_MS = 1200;
+const DEFAULT_CALIBRATION_MARGIN_DB = 12;
+const DEFAULT_CALIBRATION_MIN_THRESHOLD_DB = -60;
+const DEFAULT_CALIBRATION_MAX_THRESHOLD_DB = -20;
 
 const logTasmeeAudio = (...args: unknown[]) => {
   console.log("[tasmee-audio]", ...args);
@@ -51,6 +62,17 @@ const readMeteringValue = async (recording: Audio.Recording) => {
   }
 };
 
+const percentile = (values: number[], p: number) => {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const clamped = Math.max(0, Math.min(1, p));
+  const index = Math.floor((sorted.length - 1) * clamped);
+  return sorted[Math.max(0, Math.min(sorted.length - 1, index))];
+};
+
+const clamp = (value: number, min: number, max: number) =>
+  Math.max(min, Math.min(max, value));
+
 export const useTasmeeAudioStream = ({
   enabled,
   sessionId,
@@ -59,13 +81,26 @@ export const useTasmeeAudioStream = ({
   onError,
   chunkDurationMs = DEFAULT_CHUNK_DURATION_MS,
   speechLevelDbThreshold = DEFAULT_SPEECH_LEVEL_DB_THRESHOLD,
+  enableAutoCalibration = true,
+  calibrationDurationMs = DEFAULT_CALIBRATION_DURATION_MS,
+  calibrationMarginDb = DEFAULT_CALIBRATION_MARGIN_DB,
+  calibrationMinThresholdDb = DEFAULT_CALIBRATION_MIN_THRESHOLD_DB,
+  calibrationMaxThresholdDb = DEFAULT_CALIBRATION_MAX_THRESHOLD_DB,
 }: UseTasmeeAudioStreamArgs) => {
   const [isStreaming, setIsStreaming] = useState(false);
   const [lastLevelDb, setLastLevelDb] = useState<number | null>(null);
+  const [noiseFloorDb, setNoiseFloorDb] = useState<number | null>(null);
+  const [effectiveSpeechLevelDbThreshold, setEffectiveSpeechLevelDbThreshold] =
+    useState(speechLevelDbThreshold);
+  const effectiveThresholdRef = useRef(speechLevelDbThreshold);
 
   const onChunkRef = useRef(onChunk);
   const onSpeechActivityRef = useRef(onSpeechActivity);
   const onErrorRef = useRef(onError);
+
+  const calibrationStartedAtRef = useRef<number | null>(null);
+  const calibrationSamplesRef = useRef<number[]>([]);
+  const calibrationDoneRef = useRef(false);
 
   useEffect(() => {
     onChunkRef.current = onChunk;
@@ -78,6 +113,11 @@ export const useTasmeeAudioStream = ({
   useEffect(() => {
     onErrorRef.current = onError;
   }, [onError]);
+
+  useEffect(() => {
+    setEffectiveSpeechLevelDbThreshold(speechLevelDbThreshold);
+    effectiveThresholdRef.current = speechLevelDbThreshold;
+  }, [speechLevelDbThreshold]);
 
   useEffect(() => {
     if (!enabled || !sessionId) {
@@ -106,6 +146,14 @@ export const useTasmeeAudioStream = ({
         throw new Error("Microphone permission is required for tasmee.");
       }
 
+      const startedAtMs = Date.now();
+      calibrationStartedAtRef.current = startedAtMs;
+      calibrationSamplesRef.current = [];
+      calibrationDoneRef.current = false;
+      setNoiseFloorDb(null);
+      setEffectiveSpeechLevelDbThreshold(speechLevelDbThreshold);
+      effectiveThresholdRef.current = speechLevelDbThreshold;
+
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
@@ -121,10 +169,11 @@ export const useTasmeeAudioStream = ({
 
       while (!cancelled) {
         sequence += 1;
-        const startedAtMs = Date.now();
+        const chunkStartedAtMs = Date.now();
         const recording = new Audio.Recording();
         activeRecording = recording;
         let peakLevelDb: number | null = null;
+        const meteringSamples: number[] = [];
 
         await recording.prepareToRecordAsync({
           ...Audio.RecordingOptionsPresets.HIGH_QUALITY,
@@ -135,6 +184,22 @@ export const useTasmeeAudioStream = ({
           if (typeof status.metering !== "number") return;
           if (peakLevelDb == null || status.metering > peakLevelDb) {
             peakLevelDb = status.metering;
+          }
+          meteringSamples.push(status.metering);
+          if (meteringSamples.length > 240) {
+            meteringSamples.shift();
+          }
+
+          if (
+            enableAutoCalibration &&
+            !calibrationDoneRef.current &&
+            calibrationStartedAtRef.current != null &&
+            Date.now() - calibrationStartedAtRef.current <= calibrationDurationMs
+          ) {
+            calibrationSamplesRef.current.push(status.metering);
+            if (calibrationSamplesRef.current.length > 500) {
+              calibrationSamplesRef.current.shift();
+            }
           }
         });
         await recording.startAsync();
@@ -148,6 +213,23 @@ export const useTasmeeAudioStream = ({
             (peakLevelDb == null || polledLevelDb > peakLevelDb)
           ) {
             peakLevelDb = polledLevelDb;
+          }
+          if (polledLevelDb != null) {
+            meteringSamples.push(polledLevelDb);
+            if (meteringSamples.length > 240) {
+              meteringSamples.shift();
+            }
+            if (
+              enableAutoCalibration &&
+              !calibrationDoneRef.current &&
+              calibrationStartedAtRef.current != null &&
+              Date.now() - calibrationStartedAtRef.current <= calibrationDurationMs
+            ) {
+              calibrationSamplesRef.current.push(polledLevelDb);
+              if (calibrationSamplesRef.current.length > 500) {
+                calibrationSamplesRef.current.shift();
+              }
+            }
           }
         }
 
@@ -163,12 +245,44 @@ export const useTasmeeAudioStream = ({
         setLastLevelDb(levelDb);
 
         const timestampMs = Date.now();
+
+        if (
+          enableAutoCalibration &&
+          !calibrationDoneRef.current &&
+          calibrationStartedAtRef.current != null &&
+          timestampMs - calibrationStartedAtRef.current > calibrationDurationMs
+        ) {
+          const noiseCandidate = percentile(calibrationSamplesRef.current, 0.2);
+          if (noiseCandidate != null) {
+            const nextThreshold = clamp(
+              noiseCandidate + calibrationMarginDb,
+              calibrationMinThresholdDb,
+              calibrationMaxThresholdDb,
+            );
+            calibrationDoneRef.current = true;
+            setNoiseFloorDb(noiseCandidate);
+            setEffectiveSpeechLevelDbThreshold(nextThreshold);
+            effectiveThresholdRef.current = nextThreshold;
+            logTasmeeAudio("calibrated threshold", {
+              noiseFloorDb: noiseCandidate,
+              thresholdDb: nextThreshold,
+              sampleCount: calibrationSamplesRef.current.length,
+            });
+          } else {
+            calibrationDoneRef.current = true;
+          }
+        }
+
+        const thresholdDb = enableAutoCalibration
+          ? effectiveThresholdRef.current
+          : speechLevelDbThreshold;
         const hasSpeech =
-          levelDb != null ? levelDb >= speechLevelDbThreshold : null;
+          levelDb != null ? levelDb >= thresholdDb : null;
         logTasmeeAudio("chunk metering", {
           seq: sequence,
           levelDb,
           hasSpeech,
+          thresholdDb,
         });
 
         if (onSpeechActivityRef.current) {
@@ -190,14 +304,25 @@ export const useTasmeeAudioStream = ({
         });
 
         if (audioBase64.length > 0) {
-          await onChunkRef.current({
+          const emittedChunk: TasmeeAudioChunk = {
             seq: sequence,
             audioBase64,
             mimeType: "audio/mp4",
-            durationMs: Math.max(chunkDurationMs, timestampMs - startedAtMs),
+            durationMs: Math.max(chunkDurationMs, timestampMs - chunkStartedAtMs),
             levelDb,
             hasSpeech,
             timestampMs,
+            chunkStartedAtMs,
+            chunkEndedAtMs: timestampMs,
+          };
+          Promise.resolve(onChunkRef.current(emittedChunk)).catch((error) => {
+            if (onErrorRef.current) {
+              onErrorRef.current(
+                error instanceof Error
+                  ? error
+                  : new Error("Failed to enqueue tasmee audio chunk."),
+              );
+            }
           });
         }
 
@@ -232,5 +357,7 @@ export const useTasmeeAudioStream = ({
   return {
     isStreaming,
     lastLevelDb,
+    noiseFloorDb,
+    effectiveSpeechLevelDbThreshold,
   };
 };

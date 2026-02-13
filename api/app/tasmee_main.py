@@ -3,16 +3,24 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import contextlib
 import json
 import logging
 import os
+import secrets
+import statistics
 import time
 import uuid
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Dict, Optional
 
+import anyio
+import asyncpg
+import jwt
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from jwt import PyJWKClient
 from pydantic import BaseModel, Field
 
 from .tasmee_alignment import align_recitation
@@ -36,7 +44,7 @@ CONFIDENCE_THRESHOLD = 0.85
 HEARTBEAT_INTERVAL_SECONDS = 1.0
 SILENCE_WINDOW_SECONDS = 1.2
 MAX_EVENT_QUEUE_SIZE = 64
-
+SESSION_MAX_AGE_SECONDS = 3600
 
 
 def _float_env(name: str, default: float) -> float:
@@ -80,6 +88,14 @@ VERSE_MATCH_THRESHOLD = _float_env("TASMEE_VERSE_MATCH_THRESHOLD", 0.90)
 MATCH_SLACK = max(0, _int_env("TASMEE_MATCH_SLACK", 2))
 MAX_TOKEN_BUFFER = max(1, _int_env("TASMEE_MAX_TOKEN_BUFFER", 256))
 MAX_ANCHOR_TOKENS = max(1, _int_env("TASMEE_MAX_ANCHOR_TOKENS", 16))
+FUZZY_OVERLAP_MAX_DISTANCE = max(0, _int_env("TASMEE_FUZZY_OVERLAP_MAX_DISTANCE", 0))
+REQUIRE_AUTH = _bool_env("TASMEE_REQUIRE_AUTH", True)
+WS_TOKEN_TTL_SECONDS = max(30, _int_env("TASMEE_WS_TOKEN_TTL_SECONDS", 900))
+MAX_CHUNK_BYTES = max(1, _int_env("TASMEE_MAX_CHUNK_BYTES", 2_000_000))
+RATE_LIMIT_CHUNKS_PER_SECOND = max(0.1, _float_env("TASMEE_RATE_LIMIT_CHUNKS_PER_SECOND", 8.0))
+RATE_LIMIT_BURST = max(1.0, _float_env("TASMEE_RATE_LIMIT_BURST", 20.0))
+PRUNE_INTERVAL_SECONDS = max(10, _int_env("TASMEE_PRUNE_INTERVAL_SECONDS", 60))
+WS_AUDIO_UPLOAD_ENABLED = _bool_env("TASMEE_WS_AUDIO_UPLOAD_ENABLED", True)
 
 
 class TasmeeSessionCreateRequest(BaseModel):
@@ -111,12 +127,19 @@ class TasmeeChunkUploadRequest(BaseModel):
     duration_ms: int = Field(ge=1)
     level_db: float | None = None
     has_speech: bool | None = None
+    client_chunk_started_at_ms: int | None = None
+    client_chunk_ended_at_ms: int | None = None
+    client_sent_at_ms: int | None = None
 
 
 class TasmeeChunkUploadResponse(BaseModel):
     session_id: str
     seq_ack: int
     accepted: bool
+
+
+class TasmeeWsChunkUploadRequest(TasmeeChunkUploadRequest):
+    type: str = Field(default="chunk.upload")
 
 
 @dataclass
@@ -146,6 +169,14 @@ class SessionState:
     recited_tokens: list[str] = field(default_factory=list)
     recognizer_mode: str = "heuristic"
     shadow_mode: bool = False
+    clerk_user_id: str | None = None
+    attempt_id: str | None = None
+    transport_mode: str = "http"
+    max_confirmed_word_index: int = -1
+    confirmed_word_count: int = 0
+    latency_total_ms_samples: list[float] = field(default_factory=list)
+    rate_limit_tokens: float = RATE_LIMIT_BURST
+    rate_limit_updated_at: float = field(default_factory=time.time)
     listeners: set[asyncio.Queue[dict]] = field(default_factory=set, repr=False)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
@@ -153,16 +184,23 @@ class SessionState:
 class SessionStore:
     def __init__(self, recognizer_mode: str = "heuristic", shadow_mode: bool = False):
         self._sessions: Dict[str, SessionState] = {}
+        self._ws_tokens: Dict[str, tuple[str, str | None, float]] = {}
         self._lock = asyncio.Lock()
         self._recognizer_mode = recognizer_mode
         self._shadow_mode = shadow_mode
 
-    async def create(self, page_number: int, surah_id: int) -> str:
+    async def create(
+        self,
+        page_number: int,
+        surah_id: int,
+        *,
+        clerk_user_id: str | None = None,
+        attempt_id: str | None = None,
+    ) -> str:
         lexicon = load_page_lexicon(page_number)
         spans = build_verse_spans(len(lexicon.words), lexicon.verse_start_word_indexes)
 
         async with self._lock:
-            self._prune_locked(max_age_seconds=3600)
             session_id = str(uuid.uuid4())
             self._sessions[session_id] = SessionState(
                 page_number=page_number,
@@ -173,6 +211,8 @@ class SessionStore:
                 verse_spans=spans,
                 recognizer_mode=self._recognizer_mode,
                 shadow_mode=self._shadow_mode,
+                clerk_user_id=clerk_user_id,
+                attempt_id=attempt_id,
             )
             return session_id
 
@@ -186,7 +226,43 @@ class SessionStore:
             if not session:
                 return None
             session.stopped = True
+            self._clear_ws_tokens_locked(session_id)
             return session
+
+    async def mint_ws_token(
+        self,
+        *,
+        session_id: str,
+        clerk_user_id: str | None,
+        ttl_seconds: int = WS_TOKEN_TTL_SECONDS,
+    ) -> str:
+        token = secrets.token_urlsafe(24)
+        expires_at = time.time() + ttl_seconds
+        async with self._lock:
+            session = self._sessions.get(session_id)
+            if not session:
+                raise RuntimeError("session not found while minting ws token")
+            self._ws_tokens[token] = (session_id, clerk_user_id, expires_at)
+        return token
+
+    async def validate_ws_token(
+        self,
+        *,
+        session_id: str,
+        token: str | None,
+    ) -> bool:
+        if not token:
+            return False
+        now = time.time()
+        async with self._lock:
+            stored = self._ws_tokens.get(token)
+            if stored is None:
+                return False
+            token_session_id, _, expires_at = stored
+            if token_session_id != session_id or expires_at < now:
+                self._ws_tokens.pop(token, None)
+                return False
+            return True
 
     async def register_listener(self, session_id: str) -> Optional[asyncio.Queue[dict]]:
         async with self._lock:
@@ -233,7 +309,34 @@ class SessionStore:
             if session.stopped or now - session.created_at > max_age_seconds
         ]
         for session_id in expired:
+            self._clear_ws_tokens_locked(session_id)
             self._sessions.pop(session_id, None)
+
+    async def prune_expired(self, max_age_seconds: int) -> list[tuple[str, SessionState]]:
+        now = time.time()
+        async with self._lock:
+            expired_ids = [
+                session_id
+                for session_id, session in self._sessions.items()
+                if session.stopped or now - session.created_at > max_age_seconds
+            ]
+            removed: list[tuple[str, SessionState]] = []
+            for session_id in expired_ids:
+                session = self._sessions.pop(session_id, None)
+                if session is None:
+                    continue
+                self._clear_ws_tokens_locked(session_id)
+                removed.append((session_id, session))
+            return removed
+
+    def _clear_ws_tokens_locked(self, session_id: str) -> None:
+        stale_tokens = [
+            token
+            for token, (token_session_id, _, _) in self._ws_tokens.items()
+            if token_session_id == session_id
+        ]
+        for token in stale_tokens:
+            self._ws_tokens.pop(token, None)
 
 
 def _parse_cors_origins() -> list[str]:
@@ -281,6 +384,7 @@ def _build_status_event(
     level_db: float | None = None,
     pause_reason: str | None = None,
     silence_ms: int | None = None,
+    capabilities: dict | None = None,
 ) -> dict:
     now = time.time()
     resolved_state = state or _session_feedback_state(session, now)
@@ -298,6 +402,8 @@ def _build_status_event(
         "seq_ack": session.last_seq_ack,
         "ts_ms": _now_ms(),
     }
+    if capabilities:
+        event["capabilities"] = capabilities
 
     if resolved_state == "paused":
         resolved_pause_reason = pause_reason or session.pause_reason or "silence_timeout"
@@ -318,12 +424,180 @@ def _decode_audio_base64(audio_base64: str) -> bytes:
         raise HTTPException(status_code=400, detail="Invalid audio_base64 payload") from error
 
 
-def _hard_speech_gate(payload: TasmeeChunkUploadRequest) -> bool:
-    if payload.has_speech is not True:
+@dataclass(frozen=True)
+class TasmeeAuthSettings:
+    require_auth: bool
+    clerk_issuer: str | None
+    clerk_audience: str | None
+
+
+@lru_cache(maxsize=8)
+def _jwks_client(jwks_url: str) -> PyJWKClient:
+    return PyJWKClient(jwks_url)
+
+
+def _jwks_url(issuer: str) -> str:
+    return issuer.rstrip("/") + "/.well-known/jwks.json"
+
+
+def _resolve_auth_settings() -> TasmeeAuthSettings:
+    require_auth = _bool_env("TASMEE_REQUIRE_AUTH", REQUIRE_AUTH)
+    issuer = (os.getenv("CLERK_ISSUER") or "").strip().rstrip("/") or None
+    audience = (os.getenv("CLERK_AUDIENCE") or "").strip() or None
+    return TasmeeAuthSettings(
+        require_auth=require_auth,
+        clerk_issuer=issuer,
+        clerk_audience=audience,
+    )
+
+
+def _verify_clerk_token(token: str, settings: TasmeeAuthSettings) -> str:
+    if not settings.clerk_issuer:
+        raise HTTPException(status_code=500, detail="Missing CLERK_ISSUER for tasmee auth")
+    jwks_url = _jwks_url(settings.clerk_issuer)
+    try:
+        signing_key = _jwks_client(jwks_url).get_signing_key_from_jwt(token).key
+        decoded = jwt.decode(
+            token,
+            signing_key,
+            algorithms=["RS256"],
+            issuer=settings.clerk_issuer,
+            audience=settings.clerk_audience if settings.clerk_audience else None,
+            options={"verify_aud": bool(settings.clerk_audience)},
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Invalid token") from exc
+
+    sub = decoded.get("sub")
+    if not isinstance(sub, str) or not sub.strip():
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return sub.strip()
+
+
+def _extract_bearer_token(authorization_header: str | None) -> str | None:
+    if not authorization_header:
+        return None
+    parts = authorization_header.strip().split(" ", 1)
+    if len(parts) != 2:
+        return None
+    scheme, token = parts
+    if scheme.lower() != "bearer" or not token:
+        return None
+    return token.strip()
+
+
+def _resolve_user_id_from_authorization(
+    authorization_header: str | None,
+    auth_settings: TasmeeAuthSettings,
+) -> str | None:
+    if not auth_settings.require_auth:
+        return None
+    token = _extract_bearer_token(authorization_header)
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    return _verify_clerk_token(token, auth_settings)
+
+
+def _assert_session_owner(session: SessionState, resolved_user_id: str | None) -> None:
+    if session.clerk_user_id is None:
+        return
+    if not resolved_user_id:
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    if session.clerk_user_id != resolved_user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def _record_confirmed_progress(session: SessionState, confirmed_word_indexes: list[int]) -> None:
+    if not confirmed_word_indexes:
+        return
+    session.max_confirmed_word_index = max(
+        session.max_confirmed_word_index,
+        max(confirmed_word_indexes),
+    )
+    session.confirmed_word_count = max(
+        session.confirmed_word_count,
+        session.max_confirmed_word_index + 1,
+    )
+
+
+def _consume_rate_limit_token(session: SessionState, now: float) -> bool:
+    elapsed = max(0.0, now - session.rate_limit_updated_at)
+    refilled = elapsed * RATE_LIMIT_CHUNKS_PER_SECOND
+    session.rate_limit_tokens = min(RATE_LIMIT_BURST, session.rate_limit_tokens + refilled)
+    session.rate_limit_updated_at = now
+    if session.rate_limit_tokens < 1.0:
         return False
-    if payload.level_db is None:
-        return False
-    return payload.level_db >= HARD_SPEECH_LEVEL_DB_THRESHOLD
+    session.rate_limit_tokens -= 1.0
+    return True
+
+
+def _p95(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, int(round(0.95 * len(ordered))) - 1))
+    return float(ordered[index])
+
+
+@dataclass(frozen=True)
+class SpeechGateDecision:
+    open: bool
+    hard_gate_open: bool
+    mode: str
+    speech_hint_from_client: bool
+    speech_meter_from_client: bool
+    speech_stt_output: bool
+
+
+def _resolve_speech_gate_mode(raw: str | None) -> str:
+    normalized = (raw or "auto").strip().lower()
+    allowed = {"auto", "strict_meter", "client_hint", "stt_output"}
+    return normalized if normalized in allowed else "auto"
+
+
+def _speech_gate_decision(
+    *,
+    mode: str,
+    alignment_mode: bool,
+    payload_has_speech: bool | None,
+    payload_level_db: float | None,
+    recognition: ChunkRecognitionResult | None,
+) -> SpeechGateDecision:
+    speech_hint = payload_has_speech is True
+    speech_meter = payload_level_db is not None and payload_level_db >= HARD_SPEECH_LEVEL_DB_THRESHOLD
+    hard_gate_open = speech_hint and speech_meter
+
+    has_tokens = bool(getattr(recognition, "recognized_tokens", None) or [])
+    has_transcript = bool((getattr(recognition, "transcript", None) or "").strip())
+    speech_stt_output = bool(alignment_mode and (has_tokens or has_transcript))
+
+    resolved = _resolve_speech_gate_mode(mode)
+
+    if resolved == "strict_meter":
+        open_gate = speech_meter
+    elif resolved == "client_hint":
+        open_gate = speech_hint
+    elif resolved == "stt_output":
+        open_gate = speech_stt_output
+    else:
+        # auto: keep heuristic strict; allow alignment modes to proceed with any
+        # reasonable speech signal (meter/hint/STT output).
+        open_gate = (
+            (speech_hint and speech_meter)
+            if not alignment_mode
+            else (speech_hint or speech_meter or speech_stt_output)
+        )
+
+    return SpeechGateDecision(
+        open=open_gate,
+        hard_gate_open=hard_gate_open,
+        mode=resolved,
+        speech_hint_from_client=speech_hint,
+        speech_meter_from_client=speech_meter,
+        speech_stt_output=speech_stt_output,
+    )
 
 
 @dataclass(frozen=True)
@@ -335,7 +609,7 @@ class ProgressUpdate:
 
 
 def _is_alignment_mode(mode: str) -> bool:
-    return mode.strip().lower() in {"google", "remote"}
+    return mode.strip().lower() in {"google", "remote", "remote_ws"}
 
 
 def _apply_alignment_progress(session: SessionState, recognition: ChunkRecognitionResult) -> ProgressUpdate:
@@ -346,6 +620,7 @@ def _apply_alignment_progress(session: SessionState, recognition: ChunkRecogniti
             recognition.recognized_tokens,
             max_overlap=8,
             max_tokens=effective_max_tokens,
+            fuzzy_overlap_max_distance=FUZZY_OVERLAP_MAX_DISTANCE,
         )
 
     if not session.page_words or not session.recited_tokens:
@@ -355,13 +630,22 @@ def _apply_alignment_progress(session: SessionState, recognition: ChunkRecogniti
     start_anchor_confidence: float | None = None
 
     if session.recitation_state != "tracking":
-        anchor_spoken = session.recited_tokens[:MAX_ANCHOR_TOKENS]
+        # Use the most recent partial tokens for anchor detection.
+        anchor_spoken = session.recited_tokens[-MAX_ANCHOR_TOKENS:]
         if len(anchor_spoken) < ANCHOR_MIN_WORDS:
             return ProgressUpdate(confirmed_word_indexes=[], confidence=0.0)
 
+        candidate_spans = session.verse_spans
+        # After completing a verse, prefer re-locking forward on the page.
+        if session.next_word_index > 0 and session.verse_spans:
+            min_start = max(0, session.next_word_index - MATCH_SLACK)
+            candidate_spans = [span for span in session.verse_spans if span[0] >= min_start]
+            if not candidate_spans:
+                candidate_spans = session.verse_spans
+
         anchor_start, anchor_end, anchor_match = find_best_verse_span_match(
             session.page_words,
-            session.verse_spans,
+            candidate_spans,
             anchor_spoken,
             slack=MATCH_SLACK,
         )
@@ -382,6 +666,8 @@ def _apply_alignment_progress(session: SessionState, recognition: ChunkRecogniti
         session.anchor_verse_end_word_index = anchor_end
         session.recitation_state = "tracking"
         session.next_word_index = anchor_start
+        # Reset buffer so tracking compares spoken tokens against the anchored verse.
+        session.recited_tokens = list(anchor_spoken)
 
         start_anchor_word_index = anchor_start
         start_anchor_confidence = anchor_match.score
@@ -394,8 +680,22 @@ def _apply_alignment_progress(session: SessionState, recognition: ChunkRecogniti
     ):
         return ProgressUpdate(confirmed_word_indexes=[], confidence=0.0)
 
-    reference_words = session.page_words[anchor_start:]
-    match = best_reference_prefix_match(reference_words, session.recited_tokens, slack=MATCH_SLACK)
+    anchor_end = session.anchor_verse_end_word_index or len(session.page_words)
+    anchor_end = max(anchor_start + 1, min(anchor_end, len(session.page_words)))
+
+    if session.next_word_index >= anchor_end:
+        # Verse complete: re-lock on next verse when recited.
+        session.anchor_set = False
+        session.anchor_word_index = None
+        session.anchor_verse_end_word_index = None
+        session.recitation_state = "awaiting_anchor"
+        session.recited_tokens = []
+        return ProgressUpdate(confirmed_word_indexes=[], confidence=0.0)
+
+    reference_words = session.page_words[anchor_start:anchor_end]
+    verse_len = len(reference_words)
+    spoken_for_match = session.recited_tokens[:verse_len] if verse_len > 0 else session.recited_tokens
+    match = best_reference_prefix_match(reference_words, spoken_for_match, slack=MATCH_SLACK)
     confidence = match.score
     if confidence < VERSE_MATCH_THRESHOLD:
         return ProgressUpdate(
@@ -405,7 +705,7 @@ def _apply_alignment_progress(session: SessionState, recognition: ChunkRecogniti
             start_anchor_confidence=start_anchor_confidence,
         )
 
-    candidate_next = min(anchor_start + match.matched_reference_words, len(session.page_words))
+    candidate_next = min(anchor_start + match.matched_reference_words, anchor_end)
     old_next = max(anchor_start, session.next_word_index)
     new_next = max(old_next, candidate_next)
     confirmed = list(range(old_next, new_next))
@@ -418,6 +718,17 @@ def _apply_alignment_progress(session: SessionState, recognition: ChunkRecogniti
         )
 
     session.next_word_index = new_next
+
+    if session.next_word_index >= anchor_end:
+        overflow_tokens = session.recited_tokens[verse_len:] if verse_len > 0 else []
+        session.anchor_set = False
+        session.anchor_word_index = None
+        session.anchor_verse_end_word_index = None
+        session.recitation_state = "awaiting_anchor"
+        # Keep any overflow so we can immediately re-lock the next verse if the
+        # chunk crossed the verse boundary.
+        session.recited_tokens = overflow_tokens[-MAX_ANCHOR_TOKENS:]
+
     return ProgressUpdate(
         confirmed_word_indexes=confirmed,
         confidence=confidence,
@@ -512,6 +823,8 @@ def create_app(
     app = FastAPI(title="IqraaAI Tasmee Service")
 
     recognizer_mode = (recognizer_mode_override or RECOGNIZER_MODE).strip().lower() or "heuristic"
+    debug_events_enabled = _bool_env("TASMEE_DEBUG_EVENTS", False)
+    speech_gate_mode = _resolve_speech_gate_mode(os.getenv("TASMEE_SPEECH_GATE_MODE"))
     shadow_mode = (
         bool(shadow_recognizer_override)
         if shadow_recognizer_override is not None
@@ -521,6 +834,7 @@ def create_app(
         recognizer_mode=recognizer_mode,
         shadow_mode=shadow_mode,
     )
+    auth_settings = _resolve_auth_settings()
     recognizer = recognizer_override or create_tasmee_recognizer(recognizer_mode)
     shadow_recognizer = (
         shadow_recognizer_override
@@ -541,157 +855,391 @@ def create_app(
         allow_headers=["*"],
     )
 
+    async def _insert_attempt_row(session_id: str, session: SessionState) -> None:
+        attempt_id = session.attempt_id
+        if not attempt_id:
+            return
+        pool: asyncpg.Pool | None = getattr(app.state, "db_pool", None)
+        if pool is None:
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                insert into public.tasmee_attempts (
+                    id, session_id, clerk_user_id, page_number, surah_id, recognizer_mode, transport_mode
+                ) values ($1::uuid, $2, $3, $4, $5, $6, $7)
+                on conflict (id) do nothing
+                """,
+                attempt_id,
+                session_id,
+                session.clerk_user_id or "anonymous",
+                session.page_number,
+                session.surah_id,
+                session.recognizer_mode,
+                session.transport_mode,
+            )
+
+    async def _finalize_attempt_row(session: SessionState) -> None:
+        attempt_id = session.attempt_id
+        if not attempt_id:
+            return
+        pool: asyncpg.Pool | None = getattr(app.state, "db_pool", None)
+        if pool is None:
+            return
+        avg_total_ms = (
+            float(statistics.fmean(session.latency_total_ms_samples))
+            if session.latency_total_ms_samples
+            else None
+        )
+        p95_total_ms = _p95(session.latency_total_ms_samples)
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                update public.tasmee_attempts
+                set
+                    ended_at = now(),
+                    chunks_received = $2,
+                    chunks_with_speech = $3,
+                    deltas_emitted = $4,
+                    deltas_blocked = $5,
+                    anchor_word_index = $6,
+                    anchor_verse_end_word_index = $7,
+                    max_confirmed_word_index = $8,
+                    confirmed_word_count = $9,
+                    avg_total_ms = $10,
+                    p95_total_ms = $11,
+                    transport_mode = $12
+                where id = $1::uuid
+                """,
+                attempt_id,
+                session.chunks_received,
+                session.chunks_with_speech,
+                session.deltas_emitted,
+                session.deltas_blocked_by_gate,
+                session.anchor_word_index,
+                session.anchor_verse_end_word_index,
+                session.max_confirmed_word_index,
+                session.confirmed_word_count,
+                avg_total_ms,
+                p95_total_ms,
+                session.transport_mode,
+            )
+
+    @app.on_event("startup")
+    async def _startup() -> None:
+        database_url = (os.getenv("DATABASE_URL") or "").strip()
+        app.state.db_pool = await asyncpg.create_pool(database_url) if database_url else None
+        app.state.prune_task = asyncio.create_task(_prune_expired_sessions_loop())
+
+    @app.on_event("shutdown")
+    async def _shutdown() -> None:
+        prune_task: asyncio.Task | None = getattr(app.state, "prune_task", None)
+        if prune_task is not None:
+            prune_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await prune_task
+
+        removed = await store.prune_expired(max_age_seconds=0)
+        for _, removed_session in removed:
+            await _finalize_attempt_row(removed_session)
+
+        pool: asyncpg.Pool | None = getattr(app.state, "db_pool", None)
+        if pool is not None:
+            await pool.close()
+            app.state.db_pool = None
+
+    async def _prune_expired_sessions_loop() -> None:
+        while True:
+            await asyncio.sleep(PRUNE_INTERVAL_SECONDS)
+            removed = await store.prune_expired(max_age_seconds=SESSION_MAX_AGE_SECONDS)
+            for _, removed_session in removed:
+                await _finalize_attempt_row(removed_session)
+
     @app.get("/healthz")
     async def healthz():
         return {"ok": True}
 
     @app.post("/v1/tasmee/sessions", response_model=TasmeeSessionCreateResponse)
     async def create_session(payload: TasmeeSessionCreateRequest, request: Request):
-        session_id = await store.create(payload.page_number, payload.surah_id)
+        user_id = _resolve_user_id_from_authorization(
+            request.headers.get("authorization"),
+            auth_settings,
+        )
+        attempt_id = str(uuid.uuid4())
+        session_id = await store.create(
+            payload.page_number,
+            payload.surah_id,
+            clerk_user_id=user_id,
+            attempt_id=attempt_id,
+        )
+        session = await store.get(session_id)
+        if session is not None:
+            await _insert_attempt_row(session_id, session)
         base_url, ws_base = _public_base_urls(request)
+        ws_token = (
+            await store.mint_ws_token(session_id=session_id, clerk_user_id=user_id)
+            if auth_settings.require_auth
+            else None
+        )
         return TasmeeSessionCreateResponse(
             session_id=session_id,
             ws_url=f"{ws_base}/v1/tasmee/ws",
+            ws_token=ws_token,
             fallback_url=f"{base_url}/v1/tasmee/sessions/{session_id}/chunks",
         )
 
-    @app.post("/v1/tasmee/sessions/{session_id}/chunks", response_model=TasmeeChunkUploadResponse)
-    async def upload_chunk(session_id: str, payload: TasmeeChunkUploadRequest):
-        session = await store.get(session_id)
-        if not session or session.stopped:
-            raise HTTPException(status_code=404, detail="Session not found")
-
-        audio_bytes = _decode_audio_base64(payload.audio_base64)
+    async def _process_chunk_payload(
+        *,
+        session_id: str,
+        session: SessionState,
+        payload: TasmeeChunkUploadRequest,
+        audio_bytes: bytes,
+        decode_ms: float,
+        transport_mode: str,
+    ) -> tuple[dict, dict | None, bool, int]:
         accepted = False
         delta_event: dict | None = None
         status_event: dict
+        recognize_ms = 0.0
+        match_ms = 0.0
 
-        async with session.lock:
-            if payload.seq <= session.last_seq_ack:
-                session.deltas_blocked_by_gate += 1
-                status_event = _build_status_event(
-                    session_id=session_id,
-                    session=session,
-                    state="paused" if session.paused else "processing",
-                    has_speech=False if session.paused else session.speech_open,
-                    level_db=payload.level_db,
+        now = time.time()
+        session.transport_mode = transport_mode
+        if payload.seq <= session.last_seq_ack:
+            session.deltas_blocked_by_gate += 1
+            status_event = _build_status_event(
+                session_id=session_id,
+                session=session,
+                state="paused" if session.paused else "processing",
+                has_speech=False if session.paused else session.speech_open,
+                level_db=payload.level_db,
+                capabilities={"ws_audio_upload": WS_AUDIO_UPLOAD_ENABLED},
+            )
+            return status_event, delta_event, accepted, session.last_seq_ack
+
+        if not _consume_rate_limit_token(session, now):
+            session.deltas_blocked_by_gate += 1
+            status_event = _build_status_event(
+                session_id=session_id,
+                session=session,
+                state="processing",
+                has_speech=False,
+                level_db=payload.level_db,
+                capabilities={"ws_audio_upload": WS_AUDIO_UPLOAD_ENABLED},
+            )
+            return status_event, delta_event, accepted, session.last_seq_ack
+
+        session.last_seq_ack = payload.seq
+        session.chunks_received += 1
+
+        if session.paused:
+            status_event = _build_status_event(
+                session_id=session_id,
+                session=session,
+                state="paused",
+                has_speech=False,
+                level_db=payload.level_db,
+                capabilities={"ws_audio_upload": WS_AUDIO_UPLOAD_ENABLED},
+            )
+        else:
+            recognition_input = ChunkRecognitionInput(
+                audio_bytes=audio_bytes,
+                mime_type=payload.mime_type,
+                level_db=payload.level_db,
+                has_speech=payload.has_speech,
+                duration_ms=payload.duration_ms,
+                next_word_index=session.next_word_index,
+                anchor_set=session.anchor_set,
+            )
+
+            alignment_mode = _is_alignment_mode(session.recognizer_mode)
+            should_call_recognizer = (not alignment_mode) or (
+                payload.has_speech is True
+                or payload.level_db is None
+                or (
+                    payload.level_db is not None
+                    and payload.level_db >= HARD_SPEECH_LEVEL_DB_THRESHOLD - 10.0
                 )
-            else:
-                now = time.time()
-                session.last_seq_ack = payload.seq
-                session.chunks_received += 1
+            )
 
-                if session.paused:
+            recognize_started_ms = time.perf_counter() * 1000
+            if should_call_recognizer:
+                if alignment_mode:
+                    recognition = await anyio.to_thread.run_sync(
+                        recognizer.analyze_chunk,
+                        recognition_input,
+                    )
+                else:
+                    recognition = recognizer.analyze_chunk(recognition_input)
+            else:
+                resolved_level_db = (
+                    float(payload.level_db)
+                    if payload.level_db is not None
+                    else (-35.0 if payload.has_speech is True else -120.0)
+                )
+                recognition = ChunkRecognitionResult(
+                    has_speech=False,
+                    confidence=0.0,
+                    level_db=resolved_level_db,
+                    confirmed_word_indexes=[],
+                    transcript=None,
+                    recognized_tokens=[],
+                )
+            recognize_ms = (time.perf_counter() * 1000) - recognize_started_ms
+
+            _apply_shadow_recognition(session, recognition_input, shadow_recognizer)
+            gate = _speech_gate_decision(
+                mode=speech_gate_mode,
+                alignment_mode=alignment_mode,
+                payload_has_speech=payload.has_speech,
+                payload_level_db=payload.level_db,
+                recognition=recognition,
+            )
+
+            if gate.open:
+                session.speech_open = True
+                session.last_speech_ts = now
+                session.chunks_with_speech += 1
+
+                if not alignment_mode and recognition.confidence < CONFIDENCE_THRESHOLD:
+                    session.deltas_blocked_by_gate += 1
                     status_event = _build_status_event(
                         session_id=session_id,
                         session=session,
-                        state="paused",
-                        has_speech=False,
-                        level_db=payload.level_db,
+                        state="processing",
+                        has_speech=True,
+                        level_db=recognition.level_db,
+                        capabilities={"ws_audio_upload": WS_AUDIO_UPLOAD_ENABLED},
                     )
                 else:
-                    recognition_input = ChunkRecognitionInput(
-                        audio_bytes=audio_bytes,
-                        mime_type=payload.mime_type,
-                        level_db=payload.level_db,
-                        has_speech=payload.has_speech,
-                        duration_ms=payload.duration_ms,
-                        next_word_index=session.next_word_index,
-                        anchor_set=session.anchor_set,
+                    match_started_ms = time.perf_counter() * 1000
+                    progress = _apply_progress_from_recognition(session, recognition)
+                    match_ms = (time.perf_counter() * 1000) - match_started_ms
+                    min_confidence = (
+                        VERSE_MATCH_THRESHOLD if alignment_mode else CONFIDENCE_THRESHOLD
                     )
 
-                    recognition = recognizer.analyze_chunk(recognition_input)
-                    _apply_shadow_recognition(session, recognition_input, shadow_recognizer)
-
-                    hard_gate_open = _hard_speech_gate(payload)
-                    if hard_gate_open:
-                        session.speech_open = True
-                        session.last_speech_ts = now
-                        session.chunks_with_speech += 1
-
-                        alignment_mode = _is_alignment_mode(session.recognizer_mode)
-
-                        if not alignment_mode and recognition.confidence < CONFIDENCE_THRESHOLD:
-                            session.deltas_blocked_by_gate += 1
-                            status_event = _build_status_event(
-                                session_id=session_id,
-                                session=session,
-                                state="processing",
-                                has_speech=True,
-                                level_db=recognition.level_db,
-                            )
-                        else:
-                            progress = _apply_progress_from_recognition(session, recognition)
-                            min_confidence = (
-                                VERSE_MATCH_THRESHOLD if alignment_mode else CONFIDENCE_THRESHOLD
-                            )
-
-                            if progress.confirmed_word_indexes and progress.confidence >= min_confidence:
-                                accepted = True
-                                session.deltas_emitted += 1
-                                status_event = _build_status_event(
-                                    session_id=session_id,
-                                    session=session,
-                                    state="reciting",
-                                    has_speech=True,
-                                    level_db=recognition.level_db,
-                                )
-                                delta_event = {
-                                    "type": "feedback.delta",
-                                    "session_id": session_id,
-                                    "seq_ack": session.last_seq_ack,
-                                    "chunk_seq": payload.seq,
-                                    "has_speech": True,
-                                    "confidence": progress.confidence,
-                                    "confirmed_word_indexes": progress.confirmed_word_indexes,
-                                    "ts_ms": _now_ms(),
-                                }
-                                if progress.start_anchor_word_index is not None:
-                                    delta_event["start_anchor_word_index"] = progress.start_anchor_word_index
-                                    delta_event["start_anchor_confidence"] = progress.start_anchor_confidence
-                            else:
-                                session.deltas_blocked_by_gate += 1
-                                status_event = _build_status_event(
-                                    session_id=session_id,
-                                    session=session,
-                                    state="processing",
-                                    has_speech=True,
-                                    level_db=recognition.level_db,
-                                )
-                    else:
-                        if session.last_speech_ts is None or (
-                            now - session.last_speech_ts > SILENCE_WINDOW_SECONDS
-                        ):
-                            session.speech_open = False
-
-                        if payload.has_speech is True and payload.level_db is None:
-                            fallback_state = "processing"
-                        elif payload.has_speech is False:
-                            fallback_state = "silent"
-                        elif payload.level_db is not None and payload.level_db < HARD_SPEECH_LEVEL_DB_THRESHOLD:
-                            fallback_state = "silent"
-                        else:
-                            fallback_state = "processing"
-
+                    if progress.confirmed_word_indexes and progress.confidence >= min_confidence:
+                        accepted = True
+                        session.deltas_emitted += 1
+                        _record_confirmed_progress(session, progress.confirmed_word_indexes)
                         status_event = _build_status_event(
                             session_id=session_id,
                             session=session,
-                            state=fallback_state,
-                            has_speech=False,
+                            state="reciting",
+                            has_speech=True,
                             level_db=recognition.level_db,
+                            capabilities={"ws_audio_upload": WS_AUDIO_UPLOAD_ENABLED},
                         )
-
-                    if _pause_session_for_silence(session, now):
+                        delta_event = {
+                            "type": "feedback.delta",
+                            "session_id": session_id,
+                            "seq_ack": session.last_seq_ack,
+                            "chunk_seq": payload.seq,
+                            "has_speech": True,
+                            "confidence": progress.confidence,
+                            "confirmed_word_indexes": progress.confirmed_word_indexes,
+                            "ts_ms": _now_ms(),
+                        }
+                        if progress.start_anchor_word_index is not None:
+                            delta_event["start_anchor_word_index"] = progress.start_anchor_word_index
+                            delta_event["start_anchor_confidence"] = progress.start_anchor_confidence
+                    else:
+                        session.deltas_blocked_by_gate += 1
                         status_event = _build_status_event(
                             session_id=session_id,
                             session=session,
-                            state="paused",
-                            has_speech=False,
-                            level_db=payload.level_db,
-                            pause_reason=session.pause_reason,
+                            state="processing",
+                            has_speech=True,
+                            level_db=recognition.level_db,
+                            capabilities={"ws_audio_upload": WS_AUDIO_UPLOAD_ENABLED},
                         )
+            else:
+                if session.last_speech_ts is None or (
+                    now - session.last_speech_ts > SILENCE_WINDOW_SECONDS
+                ):
+                    session.speech_open = False
+                fallback_state = "processing"
+                if payload.has_speech is False:
+                    fallback_state = "silent"
+                elif (
+                    payload.level_db is not None
+                    and payload.level_db < HARD_SPEECH_LEVEL_DB_THRESHOLD
+                ):
+                    fallback_state = "silent"
+                status_event = _build_status_event(
+                    session_id=session_id,
+                    session=session,
+                    state=fallback_state,
+                    has_speech=False,
+                    level_db=recognition.level_db,
+                    capabilities={"ws_audio_upload": WS_AUDIO_UPLOAD_ENABLED},
+                )
 
-            seq_ack = session.last_seq_ack
+            if _pause_session_for_silence(session, now):
+                status_event = _build_status_event(
+                    session_id=session_id,
+                    session=session,
+                    state="paused",
+                    has_speech=False,
+                    level_db=payload.level_db,
+                    pause_reason=session.pause_reason,
+                    capabilities={"ws_audio_upload": WS_AUDIO_UPLOAD_ENABLED},
+                )
+
+            total_ms = decode_ms + recognize_ms + match_ms
+            session.latency_total_ms_samples.append(total_ms)
+            if debug_events_enabled:
+                debug_payload = {
+                    "recognizer_mode": session.recognizer_mode,
+                    "speech_gate_mode": gate.mode,
+                    "level_db": payload.level_db,
+                    "payload_has_speech": payload.has_speech,
+                    "hard_gate_open": gate.hard_gate_open,
+                    "recognizer_has_speech": recognition.has_speech,
+                    "recited_token_count": len(session.recited_tokens),
+                    "anchor_word_index": session.anchor_word_index,
+                    "anchor_verse_end_word_index": session.anchor_verse_end_word_index,
+                    "match_score": delta_event.get("confidence") if delta_event else None,
+                    "timing": {
+                        "decode_ms": round(decode_ms, 2),
+                        "recognize_ms": round(recognize_ms, 2),
+                        "match_ms": round(match_ms, 2),
+                        "total_ms": round(total_ms, 2),
+                    },
+                }
+                status_event["debug"] = debug_payload
+                if delta_event is not None:
+                    delta_event["debug"] = debug_payload
+
+        return status_event, delta_event, accepted, session.last_seq_ack
+
+    @app.post("/v1/tasmee/sessions/{session_id}/chunks", response_model=TasmeeChunkUploadResponse)
+    async def upload_chunk(session_id: str, payload: TasmeeChunkUploadRequest, request: Request):
+        session = await store.get(session_id)
+        if not session or session.stopped:
+            raise HTTPException(status_code=404, detail="Session not found")
+        user_id = _resolve_user_id_from_authorization(
+            request.headers.get("authorization"),
+            auth_settings,
+        )
+        _assert_session_owner(session, user_id)
+
+        decode_started_ms = time.perf_counter() * 1000
+        audio_bytes = _decode_audio_base64(payload.audio_base64)
+        if len(audio_bytes) > MAX_CHUNK_BYTES:
+            raise HTTPException(status_code=413, detail="Audio chunk too large")
+        decode_ms = (time.perf_counter() * 1000) - decode_started_ms
+
+        async with session.lock:
+            status_event, delta_event, accepted, seq_ack = await _process_chunk_payload(
+                session_id=session_id,
+                session=session,
+                payload=payload,
+                audio_bytes=audio_bytes,
+                decode_ms=decode_ms,
+                transport_mode="http",
+            )
 
         await store.broadcast_event(session_id, status_event)
         if delta_event:
@@ -707,7 +1255,15 @@ def create_app(
         "/v1/tasmee/sessions/{session_id}/stop",
         response_model=TasmeeSessionStopResponse,
     )
-    async def stop_session(session_id: str):
+    async def stop_session(session_id: str, request: Request):
+        session = await store.get(session_id)
+        if not session or session.stopped:
+            raise HTTPException(status_code=404, detail="Session not found")
+        user_id = _resolve_user_id_from_authorization(
+            request.headers.get("authorization"),
+            auth_settings,
+        )
+        _assert_session_owner(session, user_id)
         session = await store.stop(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
@@ -723,19 +1279,26 @@ def create_app(
                     "deltas_blocked_by_gate": session.deltas_blocked_by_gate,
                     "paused": session.paused,
                     "recognizer_mode": session.recognizer_mode,
+                    "transport_mode": session.transport_mode,
                 }
             ),
         )
+        await _finalize_attempt_row(session)
         return TasmeeSessionStopResponse(session_id=session_id)
 
     @app.post(
         "/v1/tasmee/sessions/{session_id}/resume",
         response_model=TasmeeSessionResumeResponse,
     )
-    async def resume_session(session_id: str):
+    async def resume_session(session_id: str, request: Request):
         session = await store.get(session_id)
         if not session or session.stopped:
             raise HTTPException(status_code=404, detail="Session not found")
+        user_id = _resolve_user_id_from_authorization(
+            request.headers.get("authorization"),
+            auth_settings,
+        )
+        _assert_session_owner(session, user_id)
 
         async with session.lock:
             session.paused = False
@@ -749,6 +1312,7 @@ def create_app(
                 state="listening",
                 has_speech=False,
                 level_db=None,
+                capabilities={"ws_audio_upload": WS_AUDIO_UPLOAD_ENABLED},
             )
 
         await store.broadcast_event(session_id, status_event)
@@ -758,7 +1322,14 @@ def create_app(
     async def tasmee_ws(
         websocket: WebSocket,
         session_id: str = Query(...),
+        token: str | None = Query(default=None),
     ):
+        if auth_settings.require_auth:
+            is_valid_token = await store.validate_ws_token(session_id=session_id, token=token)
+            if not is_valid_token:
+                await websocket.close(code=1008)
+                return
+
         session = await store.get(session_id)
         if not session or session.stopped:
             await websocket.close(code=1008)
@@ -770,7 +1341,49 @@ def create_app(
             return
 
         await websocket.accept()
-        await websocket.send_json(_build_status_event(session_id=session_id, session=session))
+        await websocket.send_json(
+            _build_status_event(
+                session_id=session_id,
+                session=session,
+                capabilities={"ws_audio_upload": WS_AUDIO_UPLOAD_ENABLED},
+            )
+        )
+
+        async def _receive_client_messages() -> None:
+            try:
+                while True:
+                    incoming = await websocket.receive_json()
+                    if not isinstance(incoming, dict):
+                        continue
+                    if incoming.get("type") != "chunk.upload":
+                        continue
+                    try:
+                        ws_payload = TasmeeWsChunkUploadRequest.model_validate(incoming)
+                    except Exception:
+                        continue
+
+                    decode_started_ms = time.perf_counter() * 1000
+                    audio_bytes = _decode_audio_base64(ws_payload.audio_base64)
+                    if len(audio_bytes) > MAX_CHUNK_BYTES:
+                        continue
+                    decode_ms = (time.perf_counter() * 1000) - decode_started_ms
+
+                    async with session.lock:
+                        status_event, delta_event, _, _ = await _process_chunk_payload(
+                            session_id=session_id,
+                            session=session,
+                            payload=ws_payload,
+                            audio_bytes=audio_bytes,
+                            decode_ms=decode_ms,
+                            transport_mode="websocket",
+                        )
+                    await store.broadcast_event(session_id, status_event)
+                    if delta_event:
+                        await store.broadcast_event(session_id, delta_event)
+            except WebSocketDisconnect:
+                return
+
+        receive_task = asyncio.create_task(_receive_client_messages())
 
         try:
             while True:
@@ -786,11 +1399,18 @@ def create_app(
                     )
                     await websocket.send_json(event)
                 except asyncio.TimeoutError:
-                    heartbeat = _build_status_event(session_id=session_id, session=state)
+                    heartbeat = _build_status_event(
+                        session_id=session_id,
+                        session=state,
+                        capabilities={"ws_audio_upload": WS_AUDIO_UPLOAD_ENABLED},
+                    )
                     await websocket.send_json(heartbeat)
         except WebSocketDisconnect:
             return
         finally:
+            receive_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, WebSocketDisconnect):
+                await receive_task
             await store.unregister_listener(session_id, queue)
 
     return app

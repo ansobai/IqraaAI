@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -385,6 +387,212 @@ class RemoteHttpTasmeeRecognizer(BaseTasmeeRecognizer):
         return transcript_value, tokens, confidence_value
 
 
+class RemoteWsTasmeeRecognizer(BaseTasmeeRecognizer):
+    """
+    Remote speech-to-text recognizer over WebSocket.
+
+    This is a "prepare for streaming" implementation: it uses a WebSocket
+    transport but does not keep per-session connections yet. The backend runs
+    analyze_chunk in a worker thread, so it's safe for this implementation to
+    block while awaiting the WS response.
+
+    Protocol (v1):
+      - Client sends a JSON text frame with metadata.
+      - Client sends a binary frame containing raw audio bytes.
+      - Server replies with a JSON text frame containing `tokens` or `transcript`
+        and optional `confidence`.
+    """
+
+    def __init__(
+        self,
+        ws_url: str | None = None,
+        bearer_token: str | None = None,
+        language_codes: list[str] | None = None,
+        model: str | None = None,
+        timeout_seconds: float | None = None,
+        protocol_version: int | None = None,
+        speech_level_db_threshold: float = -48.0,
+    ):
+        self._speech_level_db_threshold = speech_level_db_threshold
+        self._ws_url = (ws_url or os.getenv("TASMEE_REMOTE_STT_WS_URL", "")).strip()
+        if not self._ws_url:
+            raise RuntimeError("TASMEE_REMOTE_STT_WS_URL is not set; remote_ws recognizer disabled")
+
+        self._bearer_token = (bearer_token or os.getenv("TASMEE_REMOTE_STT_BEARER_TOKEN", "")).strip()
+
+        languages_raw = os.getenv("TASMEE_REMOTE_LANGUAGE_CODES", "ar")
+        env_codes = [code.strip() for code in languages_raw.split(",") if code.strip()]
+        self._language_codes = language_codes or env_codes or ["ar"]
+
+        self._model = (model or os.getenv("TASMEE_REMOTE_MODEL", "")).strip() or None
+
+        resolved_timeout = timeout_seconds
+        if resolved_timeout is None:
+            timeout_raw = (os.getenv("TASMEE_REMOTE_TIMEOUT_SECONDS") or "").strip()
+            if timeout_raw:
+                try:
+                    resolved_timeout = float(timeout_raw)
+                except ValueError:
+                    logger.warning(
+                        "invalid TASMEE_REMOTE_TIMEOUT_SECONDS=%s, using default=2.0",
+                        timeout_raw,
+                    )
+                    resolved_timeout = 2.0
+            else:
+                resolved_timeout = 2.0
+        self._timeout = max(0.1, float(resolved_timeout))
+
+        resolved_protocol = protocol_version
+        if resolved_protocol is None:
+            raw_protocol = (os.getenv("TASMEE_REMOTE_STT_PROTOCOL_VERSION") or "").strip()
+            if raw_protocol:
+                try:
+                    resolved_protocol = int(raw_protocol)
+                except ValueError:
+                    resolved_protocol = 1
+            else:
+                resolved_protocol = 1
+        self._protocol_version = max(1, int(resolved_protocol))
+
+    def analyze_chunk(self, payload: ChunkRecognitionInput) -> ChunkRecognitionResult:
+        level_db = self._resolve_level_db(payload)
+        has_speech = (
+            payload.has_speech
+            if payload.has_speech is not None
+            else level_db >= self._speech_level_db_threshold
+        )
+
+        if not has_speech:
+            return ChunkRecognitionResult(
+                has_speech=False,
+                confidence=0.0,
+                level_db=level_db,
+                confirmed_word_indexes=[],
+                transcript=None,
+                recognized_tokens=[],
+            )
+
+        transcript, tokens, transcript_confidence = asyncio.run(
+            self._transcribe_ws(
+                audio_bytes=payload.audio_bytes,
+                mime_type=payload.mime_type,
+                duration_ms=payload.duration_ms,
+            )
+        )
+
+        confidence = (
+            transcript_confidence
+            if transcript_confidence is not None and transcript_confidence > 0
+            else HeuristicTasmeeRecognizer._estimate_confidence(level_db, has_speech)
+        )
+
+        normalized_tokens = tokens
+        if not normalized_tokens and transcript:
+            normalized_tokens = tokenize_arabic_text(transcript)
+        elif normalized_tokens:
+            normalized_tokens = tokenize_arabic_text(" ".join(normalized_tokens))
+
+        return ChunkRecognitionResult(
+            has_speech=True,
+            confidence=confidence,
+            level_db=level_db,
+            confirmed_word_indexes=[],
+            transcript=transcript,
+            recognized_tokens=normalized_tokens,
+        )
+
+    def _resolve_level_db(self, payload: ChunkRecognitionInput) -> float:
+        if payload.level_db is not None:
+            return float(payload.level_db)
+        if payload.has_speech is True:
+            return -35.0
+        return -120.0
+
+    async def _transcribe_ws(
+        self,
+        *,
+        audio_bytes: bytes,
+        mime_type: str,
+        duration_ms: int,
+    ) -> tuple[str | None, list[str], float | None]:
+        if not audio_bytes:
+            return None, [], None
+
+        try:
+            import websockets  # type: ignore
+        except Exception as error:
+            logger.warning("websockets dependency missing for remote_ws: %s", error)
+            return None, [], None
+
+        extra_headers: list[tuple[str, str]] = [
+            ("Accept", "application/json"),
+            ("X-Tasmee-Protocol", str(self._protocol_version)),
+            ("X-Tasmee-Language-Codes", ",".join(self._language_codes)),
+            ("X-Tasmee-Duration-Ms", str(int(duration_ms))),
+        ]
+        if self._bearer_token:
+            extra_headers.append(("Authorization", f"Bearer {self._bearer_token}"))
+        if self._model:
+            extra_headers.append(("X-Tasmee-Model", self._model))
+
+        request = {
+            "type": "stt.request",
+            "protocol_version": self._protocol_version,
+            "mime_type": mime_type or "application/octet-stream",
+            "duration_ms": int(duration_ms),
+            "language_codes": list(self._language_codes),
+            "model": self._model,
+        }
+
+        try:
+            connect = websockets.connect  # type: ignore[attr-defined]
+            try:
+                websocket_ctx = connect(
+                    self._ws_url,
+                    extra_headers=extra_headers,
+                    open_timeout=self._timeout,
+                )
+            except TypeError:
+                websocket_ctx = connect(
+                    self._ws_url,
+                    additional_headers=extra_headers,
+                    open_timeout=self._timeout,
+                )
+
+            async with websocket_ctx as websocket:
+                await websocket.send(json.dumps(request, ensure_ascii=False))
+                await websocket.send(audio_bytes)
+                response_text = await asyncio.wait_for(websocket.recv(), timeout=self._timeout)
+        except Exception as error:
+            logger.warning("remote_ws stt request failed: %s", error)
+            return None, [], None
+
+        if not isinstance(response_text, str):
+            logger.warning("remote_ws stt invalid response type: %s", type(response_text))
+            return None, [], None
+
+        try:
+            payload = json.loads(response_text)
+        except Exception as error:
+            logger.warning("remote_ws stt invalid json response: %s", error)
+            return None, [], None
+
+        transcript = payload.get("transcript")
+        transcript_value = transcript.strip() if isinstance(transcript, str) else None
+
+        confidence = payload.get("confidence")
+        confidence_value = float(confidence) if isinstance(confidence, (int, float)) else None
+
+        tokens: list[str] = []
+        raw_tokens = payload.get("tokens")
+        if isinstance(raw_tokens, list):
+            for item in raw_tokens:
+                if isinstance(item, str) and item.strip():
+                    tokens.append(item.strip())
+
+        return transcript_value, tokens, confidence_value
+
+
 class TasmeeRecognizerAdapter(HeuristicTasmeeRecognizer):
     pass
 
@@ -395,4 +603,6 @@ def create_tasmee_recognizer(mode: str | None = None) -> BaseTasmeeRecognizer:
         return GoogleSttTasmeeRecognizer()
     if normalized == "remote":
         return RemoteHttpTasmeeRecognizer()
+    if normalized == "remote_ws":
+        return RemoteWsTasmeeRecognizer()
     return TasmeeRecognizerAdapter()

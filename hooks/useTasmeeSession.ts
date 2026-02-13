@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAuth } from "@clerk/clerk-expo";
 
 import type {
   TasmeeFeedbackDeltaEvent,
@@ -13,10 +14,16 @@ import {
   createTasmeeSession,
   openTasmeeSocket,
   resumeTasmeeSession,
+  sendTasmeeChunkOverSocket,
   stopTasmeeSession,
   type TasmeeSocketConnection,
   uploadTasmeeChunk,
 } from "../utils/tasmeeApi";
+import {
+  dequeueChunk,
+  enqueueChunk,
+  type TasmeeQueuedChunk,
+} from "../utils/tasmeeChunkQueue";
 import { loadMushafPage, type MushafPageLines } from "../utils/mushafData";
 import {
   evaluateFeedbackDeltaGate,
@@ -32,8 +39,10 @@ type UseTasmeeSessionArgs = {
 
 const REVEAL_CONFIDENCE_THRESHOLD = 0.9;
 const RECENT_SPEECH_WINDOW_MS = 1200;
-const AUDIO_SPEECH_LEVEL_DB_THRESHOLD = -35;
+const AUDIO_SPEECH_LEVEL_DB_THRESHOLD = -48;
 const AUDIO_CHUNK_DURATION_MS = 300;
+const MAX_PENDING_AUDIO_CHUNKS = 16;
+const FAST_FORWARD_QUEUE_THRESHOLD = 12;
 const MIN_CONSECUTIVE_SPEECH_CHUNKS = 1;
 const LOCAL_METERING_STALE_MS = 3000;
 const DEBUG_TASMEE = true;
@@ -59,6 +68,7 @@ const isChunkEndpointUnsupportedError = (message: string) =>
   /(^|\s)(404|not found)(\s|$)/i.test(message);
 
 export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) => {
+  const { getToken } = useAuth();
   const [status, setStatus] = useState<TasmeeSessionStatus>("idle");
   const [transportMode, setTransportMode] = useState<TasmeeTransportMode | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -70,6 +80,20 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
     useState<TasmeeFeedbackState>("listening");
   const [lastAcceptedAtMs, setLastAcceptedAtMs] = useState<number | null>(null);
   const [isSpeechDetected, setIsSpeechDetected] = useState(false);
+  const [lastDeltaEvent, setLastDeltaEvent] = useState<TasmeeFeedbackDeltaEvent | null>(
+    null,
+  );
+  const [lastStatusEvent, setLastStatusEvent] =
+    useState<TasmeeSessionStatusEvent | null>(null);
+  const [lastLocalActivity, setLastLocalActivity] = useState<
+    | {
+        seq: number;
+        hasSpeech: boolean | null;
+        levelDb: number | null;
+        timestampMs: number;
+      }
+    | null
+  >(null);
 
   const socketRef = useRef<TasmeeSocketConnection | null>(null);
   const statusRef = useRef<TasmeeSessionStatus>("idle");
@@ -85,6 +109,21 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
   const lastSpeechDetectedAtRef = useRef<number | null>(null);
   const localSpeechStreakRef = useRef<number>(0);
   const lastLocalMeteringAtRef = useRef<number | null>(null);
+  const wsAudioUploadEnabledRef = useRef(false);
+  const pendingChunksRef = useRef<
+    TasmeeQueuedChunk<{
+      seq: number;
+      audioBase64: string;
+      mimeType: string;
+      durationMs: number;
+      levelDb: number | null;
+      hasSpeech: boolean | null;
+      timestampMs: number;
+      chunkStartedAtMs: number;
+      chunkEndedAtMs: number;
+    }>[]
+  >([]);
+  const uploadWorkerRunningRef = useRef(false);
 
   useEffect(() => {
     statusRef.current = status;
@@ -109,6 +148,11 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
   useEffect(() => {
     feedbackStateRef.current = feedbackState;
   }, [feedbackState]);
+
+  const tokenProvider = useCallback(
+    async () => (await getToken()) ?? null,
+    [getToken],
+  );
 
   const updateSpeechWindowState = useCallback(() => {
     const detected = isSpeechWindowOpen(
@@ -135,6 +179,9 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
     lastSpeechDetectedAtRef.current = null;
     localSpeechStreakRef.current = 0;
     lastLocalMeteringAtRef.current = null;
+    pendingChunksRef.current = [];
+    uploadWorkerRunningRef.current = false;
+    wsAudioUploadEnabledRef.current = false;
 
     setAnchorWordIndex(null);
     setRevealedWordIndexes([]);
@@ -178,6 +225,8 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
         return;
       }
       logTasmee("ws status", event);
+      setLastStatusEvent(event);
+      wsAudioUploadEnabledRef.current = event.capabilities?.ws_audio_upload === true;
       if (event.seq_ack != null && Number.isFinite(event.seq_ack)) {
         if (event.seq_ack < lastServerSeqAckRef.current) {
           logTasmee("drop status out-of-order", {
@@ -234,6 +283,7 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
         return;
       }
 
+      setLastDeltaEvent(event);
       const nowMs = Date.now();
       const isOutOfOrderDelta =
         event.seq_ack != null &&
@@ -303,6 +353,7 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
         revealedWordIndexesRef.current = next.revealedWordIndexes;
         setRevealedWordIndexes(next.revealedWordIndexes);
       }
+      const revealAppliedAtMs = Date.now();
       logTasmee("delta applied progress", {
         seqAck: event.seq_ack ?? null,
         chunkSeq: event.chunk_seq ?? null,
@@ -311,6 +362,8 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
         revealedBefore: previousRevealedCount,
         revealedAfter: next.revealedWordIndexes.length,
         confirmedFromDelta: event.confirmed_word_indexes?.length ?? 0,
+        client_delta_received_at_ms: nowMs,
+        client_reveal_applied_at_ms: revealAppliedAtMs,
       });
 
       setFeedbackState(gate.feedbackState);
@@ -320,7 +373,111 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
     [markSpeechDetected, updateSpeechWindowState],
   );
 
-  const uploadAudioChunk = useCallback(
+  const drainPendingChunks = useCallback(async () => {
+    const currentSessionId = sessionIdRef.current;
+    if (!currentSessionId || uploadWorkerRunningRef.current) return;
+    uploadWorkerRunningRef.current = true;
+
+    try {
+      while (true) {
+        if (
+          statusRef.current === "idle" ||
+          statusRef.current === "stopped" ||
+          statusRef.current === "error"
+        ) {
+          pendingChunksRef.current = [];
+          break;
+        }
+
+        if (pendingChunksRef.current.length > FAST_FORWARD_QUEUE_THRESHOLD) {
+          pendingChunksRef.current = pendingChunksRef.current.slice(-FAST_FORWARD_QUEUE_THRESHOLD);
+        }
+
+        const next = dequeueChunk(pendingChunksRef.current);
+        pendingChunksRef.current = next.nextQueue;
+        if (!next.item) break;
+
+        const payload = next.item.payload;
+        const clientSentAtMs = Date.now();
+        const uploadBody = {
+          seq: payload.seq,
+          audio_base64: payload.audioBase64,
+          mime_type: payload.mimeType,
+          duration_ms: payload.durationMs,
+          level_db: payload.levelDb ?? undefined,
+          has_speech: payload.hasSpeech ?? undefined,
+          client_chunk_started_at_ms: payload.chunkStartedAtMs,
+          client_chunk_ended_at_ms: payload.chunkEndedAtMs,
+          client_sent_at_ms: clientSentAtMs,
+        };
+
+        const wsSent =
+          wsAudioUploadEnabledRef.current &&
+          sendTasmeeChunkOverSocket(socketRef.current, {
+            type: "chunk.upload",
+            ...uploadBody,
+          });
+
+        logTasmee("chunk upload dispatch", {
+          seq: payload.seq,
+          wsSent,
+          queueDepth: pendingChunksRef.current.length,
+          client_chunk_started_at_ms: payload.chunkStartedAtMs,
+          client_chunk_ended_at_ms: payload.chunkEndedAtMs,
+          client_sent_at_ms: clientSentAtMs,
+        });
+
+        if (wsSent) {
+          setTransportMode("websocket");
+          continue;
+        }
+
+        const response = await uploadTasmeeChunk(
+          currentSessionId,
+          uploadBody,
+          sessionInfoRef.current,
+          tokenProvider,
+        );
+        setTransportMode("http");
+
+        if (response.seq_ack < lastServerSeqAckRef.current) {
+          logTasmee("drop upload ack out-of-order", {
+            ack: response.seq_ack,
+            lastSeqAck: lastServerSeqAckRef.current,
+          });
+          continue;
+        }
+        lastServerSeqAckRef.current = response.seq_ack;
+      }
+    } catch (error) {
+      if (statusRef.current === "idle" || statusRef.current === "stopped") {
+        return;
+      }
+      logTasmee("upload chunk error", error);
+      const message = toErrorMessage(error, "Failed to upload tasmee audio chunk.");
+      if (isChunkEndpointUnsupportedError(message)) {
+        clearTransport();
+        statusRef.current = "error";
+        transportModeRef.current = null;
+        setTransportMode(null);
+        setSessionId(null);
+        setStatus("error");
+        setErrorMessage(
+          "Tasmee service is outdated (missing /chunks). Deploy the latest tasmee backend.",
+        );
+        return;
+      }
+      setStatus("error");
+      setErrorMessage(message);
+    } finally {
+      uploadWorkerRunningRef.current = false;
+      if (pendingChunksRef.current.length > 0 && sessionIdRef.current) {
+        void drainPendingChunks();
+      }
+    }
+  }, [clearTransport, tokenProvider]);
+
+  const enqueueAudioChunk = useCallback(
     async (payload: {
       seq: number;
       audioBase64: string;
@@ -329,62 +486,18 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
       levelDb: number | null;
       hasSpeech: boolean | null;
       timestampMs: number;
+      chunkStartedAtMs: number;
+      chunkEndedAtMs: number;
     }) => {
-      const currentSessionId = sessionIdRef.current;
-      if (!currentSessionId) return;
-
-      try {
-        logTasmee("upload chunk", {
-          seq: payload.seq,
-          levelDb: payload.levelDb,
-          hasSpeech: payload.hasSpeech,
-          durationMs: payload.durationMs,
-        });
-        const response = await uploadTasmeeChunk(
-          currentSessionId,
-          {
-            seq: payload.seq,
-            audio_base64: payload.audioBase64,
-            mime_type: payload.mimeType,
-            duration_ms: payload.durationMs,
-            level_db: payload.levelDb ?? undefined,
-            has_speech: payload.hasSpeech ?? undefined,
-          },
-          sessionInfoRef.current,
-        );
-
-        if (response.seq_ack < lastServerSeqAckRef.current) {
-          logTasmee("drop upload ack out-of-order", {
-            ack: response.seq_ack,
-            lastSeqAck: lastServerSeqAckRef.current,
-          });
-          return;
-        }
-        lastServerSeqAckRef.current = response.seq_ack;
-        logTasmee("upload ack", response);
-      } catch (error) {
-        if (statusRef.current === "idle" || statusRef.current === "stopped") {
-          return;
-        }
-        logTasmee("upload chunk error", error);
-        const message = toErrorMessage(error, "Failed to upload tasmee audio chunk.");
-        if (isChunkEndpointUnsupportedError(message)) {
-          clearTransport();
-          statusRef.current = "error";
-          transportModeRef.current = null;
-          setTransportMode(null);
-          setSessionId(null);
-          setStatus("error");
-          setErrorMessage(
-            "Tasmee service is outdated (missing /chunks). Deploy the latest tasmee backend.",
-          );
-          return;
-        }
-        setStatus("error");
-        setErrorMessage(message);
-      }
+      pendingChunksRef.current = enqueueChunk(
+        pendingChunksRef.current,
+        payload,
+        payload.seq,
+        MAX_PENDING_AUDIO_CHUNKS,
+      );
+      void drainPendingChunks();
     },
-    [clearTransport],
+    [drainPendingChunks],
   );
 
   const startSession = useCallback(async () => {
@@ -421,7 +534,7 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
       const remoteSession = await createTasmeeSession({
         page_number: pageNumber,
         surah_id: surahId,
-      });
+      }, tokenProvider);
       logTasmee("session created", remoteSession);
 
       sessionInfoRef.current = remoteSession;
@@ -477,6 +590,7 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
     pageNumber,
     resetProgress,
     surahId,
+    tokenProvider,
   ]);
 
   const stopSession = useCallback(async () => {
@@ -495,12 +609,12 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
     if (currentSessionId) {
       try {
         logTasmee("stop session", { sessionId: currentSessionId });
-        await stopTasmeeSession(currentSessionId);
+        await stopTasmeeSession(currentSessionId, tokenProvider);
       } catch {
         // Stopping should still reset UI state when network call fails.
       }
     }
-  }, [clearTransport, resetProgress]);
+  }, [clearTransport, resetProgress, tokenProvider]);
 
   const resumeSession = useCallback(async () => {
     const currentSessionId = sessionIdRef.current;
@@ -510,7 +624,7 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
     }
 
     try {
-      await resumeTasmeeSession(currentSessionId);
+      await resumeTasmeeSession(currentSessionId, tokenProvider);
       lastSpeechDetectedAtRef.current = null;
       localSpeechStreakRef.current = 0;
       setIsSpeechDetected(false);
@@ -521,7 +635,7 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
       setStatus("error");
       setErrorMessage(toErrorMessage(error, "Failed to resume tasmee session."));
     }
-  }, []);
+  }, [tokenProvider]);
 
   useEffect(() => {
     let isMounted = true;
@@ -584,12 +698,13 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
     };
   }, [isRunning, updateSpeechWindowState]);
 
-  useTasmeeAudioStream({
+  const audioStream = useTasmeeAudioStream({
     enabled: isCapturingAudio && sessionId != null,
     sessionId,
-    onChunk: uploadAudioChunk,
+    onChunk: enqueueAudioChunk,
     onSpeechActivity: (activity) => {
       logTasmee("local speech activity", activity);
+      setLastLocalActivity(activity);
       if (activity.levelDb != null) {
         lastLocalMeteringAtRef.current = activity.timestampMs;
       }
@@ -608,6 +723,7 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
     },
     chunkDurationMs: AUDIO_CHUNK_DURATION_MS,
     speechLevelDbThreshold: AUDIO_SPEECH_LEVEL_DB_THRESHOLD,
+    enableAutoCalibration: true,
   });
 
   const totalWordCount = useMemo(() => countPageWords(pageData), [pageData]);
@@ -640,6 +756,16 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
     isPaused,
     isLocked,
     isListeningForStart,
+    debug: {
+      audio: {
+        lastLevelDb: audioStream.lastLevelDb,
+        noiseFloorDb: audioStream.noiseFloorDb,
+        effectiveSpeechLevelDbThreshold: audioStream.effectiveSpeechLevelDbThreshold,
+      },
+      lastLocalActivity,
+      lastDeltaEvent,
+      lastStatusEvent,
+    },
     startSession,
     resumeSession,
     stopSession,

@@ -28,11 +28,13 @@ export const resolveAnchorWordIndex = (
   totalWordCount: number,
   confidenceThreshold = 0.72,
 ) => {
-  if (currentAnchor != null) return currentAnchor;
   if (nextAnchor == null || !Number.isFinite(nextAnchor)) return currentAnchor;
   if (totalWordCount <= 0) return currentAnchor;
   if (confidence != null && confidence < confidenceThreshold) return currentAnchor;
-  return clampIndex(nextAnchor, totalWordCount);
+  const clamped = clampIndex(nextAnchor, totalWordCount);
+  if (currentAnchor == null) return clamped;
+  // Allow re-locking to a new verse anchor (server can emit a new anchor later).
+  return currentAnchor === clamped ? currentAnchor : clamped;
 };
 
 export const resolveAnchorFromConfirmedWordIndexes = (

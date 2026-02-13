@@ -39,6 +39,7 @@ def merge_recited_tokens(
     *,
     max_overlap: int = 8,
     max_tokens: int = 64,
+    fuzzy_overlap_max_distance: int = 0,
 ) -> list[str]:
     if not incoming_tokens:
         return buffer_tokens
@@ -53,6 +54,15 @@ def merge_recited_tokens(
             if buffer_tokens[-k:] == incoming[:k]:
                 overlap = k
                 break
+
+        if overlap == 0 and fuzzy_overlap_max_distance > 0:
+            # STT output often jitters (minor substitutions) between partials. Allow a
+            # small edit-distance overlap so we don't endlessly re-append near-duplicates.
+            for k in range(overlap_limit, 0, -1):
+                dist = token_levenshtein_distance(buffer_tokens[-k:], incoming[:k])
+                if dist <= fuzzy_overlap_max_distance:
+                    overlap = k
+                    break
         merged = buffer_tokens + incoming[overlap:]
 
     if max_tokens > 0 and len(merged) > max_tokens:

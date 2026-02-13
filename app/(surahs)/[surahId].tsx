@@ -41,6 +41,8 @@ import QuranPager from "../../components/QuranPager";
 import BookmarkModal from "../../components/BookmarkModal";
 import SurahCarousel from "../../components/SurahCarousel";
 import TasmeePage from "../../components/TasmeePage";
+import TasmeeOverlay from "../../components/TasmeeOverlay";
+import TasmeeDebugHud from "../../components/TasmeeDebugHud";
 import { LAST_READ_PAGE_KEY } from "../../constants/storage";
 import { useTasmeeSession } from "../../hooks/useTasmeeSession";
 import { ARABIC_SURAHS } from "../../constants/surahNames";
@@ -158,6 +160,8 @@ export default function SurahScreen() {
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const windowDimensions = useWindowDimensions();
   const isLandscape = windowDimensions.width > windowDimensions.height;
+  const [tasmeeDebugVisible, setTasmeeDebugVisible] = useState(false);
+  const [tasmeeOverlayEnabled, setTasmeeOverlayEnabled] = useState(false);
   const { query, setQuery, results, isSearching } = useQuranSearch();
 
   const pinchScale = useSharedValue(1);
@@ -623,7 +627,16 @@ export default function SurahScreen() {
     >
       {pageSize.width > 0 && pageSize.height > 0 ? (
         tasmee.isRunning ? (
-          <TasmeePage pageData={tasmee.pageData} wordStates={tasmee.wordStates} />
+          <View style={{ flex: 1, position: "relative" }}>
+            <TasmeePage pageData={tasmee.pageData} wordStates={tasmee.wordStates} />
+            {tasmeeOverlayEnabled ? (
+              <TasmeeOverlay
+                pageData={tasmee.pageData}
+                isLocked={tasmee.isLocked}
+                wordStates={tasmee.wordStates}
+              />
+            ) : null}
+          </View>
         ) : (
           <QuranPager
             data={PAGE_NUMBERS}
@@ -638,6 +651,15 @@ export default function SurahScreen() {
       ) : null}
       {listeningBanner}
       {tasmeeErrorBanner}
+      {__DEV__ ? (
+        <TasmeeDebugHud
+          visible={tasmeeDebugVisible}
+          onClose={() => setTasmeeDebugVisible(false)}
+          overlayEnabled={tasmeeOverlayEnabled}
+          onToggleOverlay={() => setTasmeeOverlayEnabled((value) => !value)}
+          debug={tasmee.debug}
+        />
+      ) : null}
     </Animated.View>
   );
 
@@ -917,6 +939,25 @@ export default function SurahScreen() {
                     resizeMode="contain"
                   />
                 </Pressable>
+                {__DEV__ ? (
+                  <Pressable
+                    onPress={() => setTasmeeDebugVisible((value) => !value)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Toggle tasmee debug"
+                    style={({ pressed }) => ({
+                      paddingHorizontal: 10,
+                      paddingVertical: 6,
+                      borderRadius: 10,
+                      borderWidth: 1,
+                      borderColor: MUSHAF_BORDER,
+                      backgroundColor: pressed ? "rgba(37,90,109,0.15)" : "transparent",
+                    })}
+                  >
+                    <Text style={{ color: MUSHAF_ACCENT_DARK, fontWeight: "700" }}>
+                      DBG
+                    </Text>
+                  </Pressable>
+                ) : null}
               </View>
             </View>
           </View>
@@ -948,12 +989,32 @@ export default function SurahScreen() {
               {pageSize.width > 0 && pageSize.height > 0 ? (
                 tasmee.isRunning ? (
                   <View style={{ flex: 1 }}>
-                    <TasmeePage
-                      pageData={tasmee.pageData}
-                      wordStates={tasmee.wordStates}
-                    />
+                    <View style={{ flex: 1, position: "relative" }}>
+                      <TasmeePage
+                        pageData={tasmee.pageData}
+                        wordStates={tasmee.wordStates}
+                      />
+                      {tasmeeOverlayEnabled ? (
+                        <TasmeeOverlay
+                          pageData={tasmee.pageData}
+                          isLocked={tasmee.isLocked}
+                          wordStates={tasmee.wordStates}
+                        />
+                      ) : null}
+                    </View>
                     {listeningBanner}
                     {tasmeeErrorBanner}
+                    {__DEV__ ? (
+                      <TasmeeDebugHud
+                        visible={tasmeeDebugVisible}
+                        onClose={() => setTasmeeDebugVisible(false)}
+                        overlayEnabled={tasmeeOverlayEnabled}
+                        onToggleOverlay={() =>
+                          setTasmeeOverlayEnabled((value) => !value)
+                        }
+                        debug={tasmee.debug}
+                      />
+                    ) : null}
                   </View>
                 ) : (
                   <QuranPager

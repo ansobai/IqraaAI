@@ -2,10 +2,18 @@ import base64
 import json
 from typing import Callable
 
+import pytest
 from fastapi.testclient import TestClient
 
 import api.app.tasmee_main as tasmee_main
 from api.app.tasmee_main import create_app
+from api.app.tasmee_engine import ChunkRecognitionResult, BaseTasmeeRecognizer
+from api.app.tasmee_page_lexicon import load_page_lexicon
+
+
+@pytest.fixture(autouse=True)
+def _disable_tasmee_auth(monkeypatch):
+    monkeypatch.setenv("TASMEE_REQUIRE_AUTH", "false")
 
 
 def _chunk_payload(
@@ -57,6 +65,33 @@ def test_healthz():
         response = client.get("/healthz")
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+def test_ws_chunk_upload_emits_status_and_delta():
+    app = create_app()
+    with TestClient(app) as client:
+        created = client.post("/v1/tasmee/sessions", json={"page_number": 3, "surah_id": 3})
+        session_id = created.json()["session_id"]
+
+        with client.websocket_connect(f"/v1/tasmee/ws?session_id={session_id}") as websocket:
+            websocket.receive_json()
+            websocket.send_json(
+                {
+                    "type": "chunk.upload",
+                    **_chunk_payload(seq=1, level_db=-34.0, has_speech=True),
+                }
+            )
+            _receive_json_until(
+                websocket,
+                lambda payload: payload.get("type") == "session.status"
+                and payload.get("seq_ack") == 1,
+            )
+            delta_event = _receive_json_until(
+                websocket,
+                lambda payload: payload.get("type") == "feedback.delta"
+                and payload.get("seq_ack") == 1,
+            )
+            assert delta_event["confirmed_word_indexes"] == [0]
 
 
 def test_silent_chunk_emits_silent_status_and_no_delta():
@@ -236,6 +271,88 @@ def test_out_of_order_sequence_is_rejected_without_progress_regression():
                 and payload.get("seq_ack") == 2,
             )
             assert second_delta["confirmed_word_indexes"] == [1]
+
+
+class _FixedTokenRecognizer(BaseTasmeeRecognizer):
+    def __init__(self, tokens: list[str], confidence: float = 1.0):
+        self._tokens = tokens
+        self._confidence = confidence
+
+    def analyze_chunk(self, payload):  # type: ignore[override]
+        return ChunkRecognitionResult(
+            has_speech=True,
+            confidence=self._confidence,
+            level_db=float(payload.level_db) if payload.level_db is not None else -120.0,
+            confirmed_word_indexes=[],
+            transcript="",
+            recognized_tokens=list(self._tokens),
+        )
+
+
+def test_alignment_mode_allows_progress_without_meter_when_stt_outputs_tokens(monkeypatch):
+    lexicon = load_page_lexicon(1)
+    tokens = [word for word in lexicon.words[:3] if word.strip()]
+    assert len(tokens) >= 3
+
+    monkeypatch.setenv("TASMEE_SPEECH_GATE_MODE", "auto")
+    app = create_app(
+        recognizer_override=_FixedTokenRecognizer(tokens),
+        recognizer_mode_override="remote",
+    )
+
+    with TestClient(app) as client:
+        created = client.post("/v1/tasmee/sessions", json={"page_number": 1, "surah_id": 1})
+        session_id = created.json()["session_id"]
+
+        with client.websocket_connect(f"/v1/tasmee/ws?session_id={session_id}") as websocket:
+            websocket.receive_json()
+            uploaded = client.post(
+                f"/v1/tasmee/sessions/{session_id}/chunks",
+                json=_chunk_payload(seq=1, level_db=None, has_speech=False),
+            )
+            body = uploaded.json()
+            assert uploaded.status_code == 200
+            assert body["accepted"] is True
+
+            delta_event = _receive_json_until(
+                websocket,
+                lambda payload: payload.get("type") == "feedback.delta"
+                and payload.get("seq_ack") == 1,
+            )
+            assert (delta_event.get("confirmed_word_indexes") or [])[:3] == [0, 1, 2]
+
+
+def test_alignment_mode_strict_meter_blocks_without_level_db(monkeypatch):
+    lexicon = load_page_lexicon(1)
+    tokens = [word for word in lexicon.words[:3] if word.strip()]
+    assert len(tokens) >= 3
+
+    monkeypatch.setenv("TASMEE_SPEECH_GATE_MODE", "strict_meter")
+    app = create_app(
+        recognizer_override=_FixedTokenRecognizer(tokens),
+        recognizer_mode_override="remote",
+    )
+
+    with TestClient(app) as client:
+        created = client.post("/v1/tasmee/sessions", json={"page_number": 1, "surah_id": 1})
+        session_id = created.json()["session_id"]
+
+        with client.websocket_connect(f"/v1/tasmee/ws?session_id={session_id}") as websocket:
+            websocket.receive_json()
+            uploaded = client.post(
+                f"/v1/tasmee/sessions/{session_id}/chunks",
+                json=_chunk_payload(seq=1, level_db=None, has_speech=False),
+            )
+            body = uploaded.json()
+            assert uploaded.status_code == 200
+            assert body["accepted"] is False
+
+            status_event = _receive_json_until(
+                websocket,
+                lambda payload: payload.get("type") == "session.status"
+                and payload.get("seq_ack") == 1,
+            )
+            assert status_event["state"] in {"silent", "processing"}
 
 
 def test_session_auto_pauses_after_silence_and_resume_unpauses():

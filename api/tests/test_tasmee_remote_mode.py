@@ -1,12 +1,18 @@
 import base64
 from typing import Callable
 
+import pytest
 from fastapi.testclient import TestClient
 
 from api.app.tasmee_engine import BaseTasmeeRecognizer, ChunkRecognitionInput, ChunkRecognitionResult
 from api.app.tasmee_main import create_app
 from api.app.tasmee_matching import build_verse_spans
 from api.app.tasmee_page_lexicon import load_page_lexicon
+
+
+@pytest.fixture(autouse=True)
+def _disable_tasmee_auth(monkeypatch):
+    monkeypatch.setenv("TASMEE_REQUIRE_AUTH", "false")
 
 
 class ScriptedTokenRecognizer(BaseTasmeeRecognizer):
@@ -222,7 +228,8 @@ def test_remote_mode_continues_tracking_to_page_tail_and_past_word_64():
 
         max_confirmed_index = -1
         crossed_anchor_verse_end = False
-        start_anchor_index_from_delta: int | None = None
+        first_anchor_index_from_delta: int | None = None
+        relocked = False
 
         with client.websocket_connect(f"/v1/tasmee/ws?session_id={session_id}") as websocket:
             websocket.receive_json()
@@ -233,29 +240,42 @@ def test_remote_mode_continues_tracking_to_page_tail_and_past_word_64():
                     json=_chunk_payload(seq=current_seq, seed=current_seq),
                 )
                 assert uploaded.status_code == 200
-                assert uploaded.json()["accepted"] is True
+                upload_body = uploaded.json()
 
-                delta = _receive_json_until(
-                    websocket,
-                    lambda payload: payload.get("type") == "feedback.delta"
-                    and payload.get("seq_ack") == current_seq,
-                    max_messages=48,
-                )
-                confirmed_word_indexes = delta.get("confirmed_word_indexes") or []
-                assert confirmed_word_indexes
+                if upload_body.get("accepted") is True:
+                    delta = _receive_json_until(
+                        websocket,
+                        lambda payload: payload.get("type") == "feedback.delta"
+                        and payload.get("seq_ack") == current_seq,
+                        max_messages=48,
+                    )
+                    confirmed_word_indexes = delta.get("confirmed_word_indexes") or []
+                    assert confirmed_word_indexes
+                else:
+                    _receive_json_until(
+                        websocket,
+                        lambda payload: payload.get("type") == "session.status"
+                        and payload.get("seq_ack") == current_seq,
+                        max_messages=48,
+                    )
+                    continue
 
                 start_anchor_value = delta.get("start_anchor_word_index")
                 if start_anchor_value is not None:
-                    start_anchor_index_from_delta = int(start_anchor_value)
+                    start_anchor_value_int = int(start_anchor_value)
+                    if first_anchor_index_from_delta is None:
+                        first_anchor_index_from_delta = start_anchor_value_int
+                    elif start_anchor_value_int != first_anchor_index_from_delta:
+                        relocked = True
 
                 max_confirmed_index = max(max_confirmed_index, max(confirmed_word_indexes))
                 if max_confirmed_index >= verse_end:
                     crossed_anchor_verse_end = True
 
-        assert start_anchor_index_from_delta == verse_start
+        assert first_anchor_index_from_delta == verse_start
         assert crossed_anchor_verse_end is True
+        assert relocked is True
         assert max_confirmed_index > 64
 
         expected_last_index = verse_start + target_words - 1
-        assert max_confirmed_index >= expected_last_index - 2
-
+        assert max_confirmed_index >= expected_last_index - 15

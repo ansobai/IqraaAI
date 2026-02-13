@@ -9,6 +9,7 @@ import type {
   TasmeeSessionResumeResponse,
   TasmeeSessionStatusEvent,
   TasmeeWsEvent,
+  TasmeeWsChunkUploadRequest,
 } from "../types/tasmee";
 
 type TokenProvider = (() => Promise<string | null>) | undefined;
@@ -23,6 +24,7 @@ type TasmeeSocketHandlers = {
 export interface TasmeeSocketConnection {
   close: () => void;
   isOpen: () => boolean;
+  sendJson: (payload: Record<string, unknown>) => boolean;
 }
 
 const rawTasmeeBaseUrl = process.env.EXPO_PUBLIC_TASMEE_API_URL?.trim() ?? "";
@@ -263,7 +265,20 @@ export const openTasmeeSocket = (
       }
     },
     isOpen: () => socket.readyState === WebSocket.OPEN,
+    sendJson: (payload: Record<string, unknown>) => {
+      if (socket.readyState !== WebSocket.OPEN) return false;
+      socket.send(JSON.stringify(payload));
+      return true;
+    },
   };
+};
+
+export const sendTasmeeChunkOverSocket = (
+  socket: TasmeeSocketConnection | null,
+  payload: TasmeeWsChunkUploadRequest,
+) => {
+  if (!socket || !socket.isOpen()) return false;
+  return socket.sendJson(payload as unknown as Record<string, unknown>);
 };
 
 export const uploadTasmeeChunk = async (

@@ -593,6 +593,170 @@ class RemoteWsTasmeeRecognizer(BaseTasmeeRecognizer):
         return transcript_value, tokens, confidence_value
 
 
+class OpenAISttTasmeeRecognizer(BaseTasmeeRecognizer):
+    """
+    OpenAI speech-to-text recognizer for tasmee alignment mode.
+
+    Uses the OpenAI `/v1/audio/transcriptions` endpoint and returns a normalized
+    token list. Alignment is handled in tasmee_main against the current page
+    lexicon.
+    """
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        model: str | None = None,
+        language: str | None = None,
+        prompt: str | None = None,
+        timeout_seconds: float | None = None,
+        speech_level_db_threshold: float = -48.0,
+        client: httpx.Client | None = None,
+    ):
+        self._speech_level_db_threshold = speech_level_db_threshold
+        self._api_key = (
+            (api_key or os.getenv("TASMEE_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or "")
+            .strip()
+        )
+        if not self._api_key:
+            raise RuntimeError("OPENAI_API_KEY is not set; openai recognizer disabled")
+
+        self._base_url = (
+            (base_url or os.getenv("TASMEE_OPENAI_BASE_URL") or "https://api.openai.com/v1")
+            .strip()
+            .rstrip("/")
+        )
+        self._model = (model or os.getenv("TASMEE_OPENAI_MODEL") or "whisper-1").strip() or "whisper-1"
+        self._language = (language or os.getenv("TASMEE_OPENAI_LANGUAGE") or "").strip() or None
+        self._prompt = (prompt or os.getenv("TASMEE_OPENAI_PROMPT") or "").strip() or None
+
+        resolved_timeout = timeout_seconds
+        if resolved_timeout is None:
+            timeout_raw = (os.getenv("TASMEE_OPENAI_TIMEOUT_SECONDS") or "").strip()
+            if timeout_raw:
+                try:
+                    resolved_timeout = float(timeout_raw)
+                except ValueError:
+                    logger.warning(
+                        "invalid TASMEE_OPENAI_TIMEOUT_SECONDS=%s, using default=15.0",
+                        timeout_raw,
+                    )
+                    resolved_timeout = 15.0
+            else:
+                resolved_timeout = 15.0
+
+        self._timeout = max(0.1, float(resolved_timeout))
+        self._client = client or httpx.Client(timeout=httpx.Timeout(self._timeout))
+
+    def analyze_chunk(self, payload: ChunkRecognitionInput) -> ChunkRecognitionResult:
+        level_db = self._resolve_level_db(payload)
+        has_speech = (
+            payload.has_speech
+            if payload.has_speech is not None
+            else level_db >= self._speech_level_db_threshold
+        )
+
+        if not has_speech:
+            return ChunkRecognitionResult(
+                has_speech=False,
+                confidence=0.0,
+                level_db=level_db,
+                confirmed_word_indexes=[],
+                transcript=None,
+                recognized_tokens=[],
+            )
+
+        transcript = self._transcribe(
+            audio_bytes=payload.audio_bytes,
+            mime_type=payload.mime_type,
+            duration_ms=payload.duration_ms,
+        )
+        tokens = tokenize_arabic_text(transcript or "")
+        confidence = HeuristicTasmeeRecognizer._estimate_confidence(level_db, has_speech)
+
+        return ChunkRecognitionResult(
+            has_speech=True,
+            confidence=confidence,
+            level_db=level_db,
+            confirmed_word_indexes=[],
+            transcript=transcript,
+            recognized_tokens=tokens,
+        )
+
+    def _resolve_level_db(self, payload: ChunkRecognitionInput) -> float:
+        if payload.level_db is not None:
+            return float(payload.level_db)
+        if payload.has_speech is True:
+            return -35.0
+        return -120.0
+
+    @staticmethod
+    def _filename_for_mime(mime_type: str | None) -> str:
+        normalized = (mime_type or "").strip().lower()
+        if normalized.endswith("webm") or "webm" in normalized:
+            return "audio.webm"
+        if normalized.endswith("wav") or "wav" in normalized:
+            return "audio.wav"
+        if normalized.endswith("mpeg") or "mpeg" in normalized or "mp3" in normalized:
+            return "audio.mp3"
+        return "audio.mp4"
+
+    def _transcribe(
+        self,
+        *,
+        audio_bytes: bytes,
+        mime_type: str,
+        duration_ms: int,
+    ) -> str | None:
+        if not audio_bytes:
+            return None
+
+        url = f"{self._base_url}/audio/transcriptions"
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+        }
+        data: dict[str, str] = {
+            "model": self._model,
+            "response_format": "json",
+        }
+        if self._language:
+            data["language"] = self._language
+        if self._prompt:
+            data["prompt"] = self._prompt
+
+        files = {
+            "file": (
+                self._filename_for_mime(mime_type),
+                audio_bytes,
+                mime_type or "application/octet-stream",
+            ),
+        }
+
+        try:
+            response = self._client.post(url, headers=headers, data=data, files=files)
+        except Exception as error:
+            logger.warning("openai stt request failed: %s", error)
+            return None
+
+        if response.status_code != 200:
+            logger.warning(
+                "openai stt non-200 response: status=%s body=%s",
+                response.status_code,
+                (response.text or "")[:400],
+            )
+            return None
+
+        try:
+            payload = response.json()
+        except Exception as error:
+            logger.warning("openai stt invalid json response: %s", error)
+            return None
+
+        transcript = payload.get("text") or payload.get("transcript")
+        transcript_value = transcript.strip() if isinstance(transcript, str) else None
+        return transcript_value or None
+
+
 class TasmeeRecognizerAdapter(HeuristicTasmeeRecognizer):
     pass
 
@@ -605,4 +769,6 @@ def create_tasmee_recognizer(mode: str | None = None) -> BaseTasmeeRecognizer:
         return RemoteHttpTasmeeRecognizer()
     if normalized == "remote_ws":
         return RemoteWsTasmeeRecognizer()
+    if normalized == "openai":
+        return OpenAISttTasmeeRecognizer()
     return TasmeeRecognizerAdapter()

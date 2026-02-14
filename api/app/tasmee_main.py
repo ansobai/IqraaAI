@@ -396,6 +396,7 @@ def _build_status_event(
     event: dict = {
         "type": "session.status",
         "session_id": session_id,
+        "recognizer_mode": session.recognizer_mode,
         "state": resolved_state,
         "has_speech": has_speech if has_speech is not None else recent_speech,
         "level_db": level_db,
@@ -609,7 +610,7 @@ class ProgressUpdate:
 
 
 def _is_alignment_mode(mode: str) -> bool:
-    return mode.strip().lower() in {"google", "remote", "remote_ws"}
+    return mode.strip().lower() in {"google", "remote", "remote_ws", "openai"}
 
 
 def _apply_alignment_progress(session: SessionState, recognition: ChunkRecognitionResult) -> ProgressUpdate:
@@ -1134,6 +1135,7 @@ def create_app(
                         delta_event = {
                             "type": "feedback.delta",
                             "session_id": session_id,
+                            "recognizer_mode": session.recognizer_mode,
                             "seq_ack": session.last_seq_ack,
                             "chunk_seq": payload.seq,
                             "has_speech": True,

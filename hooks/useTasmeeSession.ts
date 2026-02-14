@@ -73,6 +73,7 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
   const [transportMode, setTransportMode] = useState<TasmeeTransportMode | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [recognizerMode, setRecognizerMode] = useState<string | null>(null);
   const [pageData, setPageData] = useState<MushafPageLines | null>(null);
   const [anchorWordIndex, setAnchorWordIndex] = useState<number | null>(null);
   const [revealedWordIndexes, setRevealedWordIndexes] = useState<number[]>([]);
@@ -188,6 +189,7 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
     setFeedbackState("listening");
     setLastAcceptedAtMs(null);
     setIsSpeechDetected(false);
+    setRecognizerMode(null);
   }, []);
 
   const markSpeechDetected = useCallback((timestampMs: number) => {
@@ -226,6 +228,9 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
       }
       logTasmee("ws status", event);
       setLastStatusEvent(event);
+      if (event.recognizer_mode) {
+        setRecognizerMode(event.recognizer_mode);
+      }
       wsAudioUploadEnabledRef.current = event.capabilities?.ws_audio_upload === true;
       if (event.seq_ack != null && Number.isFinite(event.seq_ack)) {
         if (event.seq_ack < lastServerSeqAckRef.current) {
@@ -284,6 +289,9 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
       }
 
       setLastDeltaEvent(event);
+      if (event.recognizer_mode) {
+        setRecognizerMode(event.recognizer_mode);
+      }
       const nowMs = Date.now();
       const isOutOfOrderDelta =
         event.seq_ack != null &&
@@ -744,6 +752,7 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
     transportMode,
     sessionId,
     errorMessage,
+    recognizerMode,
     pageData,
     anchorWordIndex,
     revealedWordIndexes,

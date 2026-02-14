@@ -62,6 +62,7 @@ export type TasmeeDebugPayload = {
 export interface TasmeeFeedbackDeltaEvent {
   type: "feedback.delta";
   session_id: string;
+  recognizer_mode?: string;
   seq_ack?: number;
   chunk_seq?: number;
   has_speech?: boolean;
@@ -77,6 +78,7 @@ export interface TasmeeFeedbackDeltaEvent {
 export interface TasmeeSessionStatusEvent {
   type: "session.status";
   session_id: string;
+  recognizer_mode?: string;
   state: TasmeeFeedbackState;
   has_speech: boolean;
   level_db?: number;

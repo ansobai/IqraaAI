@@ -570,6 +570,45 @@ export default function SurahScreen() {
     </View>
   ) : null;
 
+  const tasmeeHeuristicModeBanner =
+    tasmee.isRunning && tasmee.recognizerMode === "heuristic" ? (
+      <View
+        pointerEvents="none"
+        style={{
+          position: "absolute",
+          top: 78,
+          left: 0,
+          right: 0,
+          alignItems: "center",
+        }}
+      >
+        <View
+          style={{
+            backgroundColor: "rgba(255, 248, 225, 0.98)",
+            borderWidth: 1,
+            borderColor: "#D6B36A",
+            borderRadius: 14,
+            paddingHorizontal: 12,
+            paddingVertical: 8,
+            maxWidth: "92%",
+          }}
+        >
+          <Text
+            style={{
+              color: "#5A3B00",
+              fontSize: 12,
+              fontWeight: "600",
+              textAlign: "center",
+            }}
+          >
+            Tasmee backend is running in heuristic mode (no STT). It can advance on
+            any loud sound. Configure `TASMEE_RECOGNIZER_MODE` (google/remote/openai)
+            to actually verify recitation.
+          </Text>
+        </View>
+      </View>
+    ) : null;
+
   const listeningBanner = tasmee.isRunning ? (
     <View
       pointerEvents="none"
@@ -650,6 +689,7 @@ export default function SurahScreen() {
         )
       ) : null}
       {listeningBanner}
+      {tasmeeHeuristicModeBanner}
       {tasmeeErrorBanner}
       {__DEV__ ? (
         <TasmeeDebugHud

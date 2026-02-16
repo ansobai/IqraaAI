@@ -929,7 +929,14 @@ def create_app(
     @app.on_event("startup")
     async def _startup() -> None:
         database_url = (os.getenv("DATABASE_URL") or "").strip()
-        app.state.db_pool = await asyncpg.create_pool(database_url) if database_url else None
+        if database_url:
+            try:
+                app.state.db_pool = await asyncpg.create_pool(database_url)
+            except Exception as exc:  # pragma: no cover - depends on env/network
+                logger.warning("tasmee db connection failed; continuing without db: %s", exc)
+                app.state.db_pool = None
+        else:
+            app.state.db_pool = None
         app.state.prune_task = asyncio.create_task(_prune_expired_sessions_loop())
 
     @app.on_event("shutdown")

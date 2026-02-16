@@ -79,6 +79,13 @@ Cloud Run deploy script:
 ./api/scripts/deploy_tasmee_cloud_run.ps1 -ProjectId <your-project-id> -Region me-central1
 ```
 
+## Quran STT (Self-hosted model on Azure ML)
+
+If you want a Qur'an-tuned Whisper model (e.g. `tarteel-ai/whisper-base-ar-quran`), you can deploy a separate STT service and point tasmee at it using `TASMEE_RECOGNIZER_MODE=remote`.
+
+- STT service: `api/stt_service/README.md`
+- Azure ML endpoint templates: `api/azureml/quran_stt/README.md`
+
 ## Database (Postgres)
 
 - Schema: `db/schema.sql`

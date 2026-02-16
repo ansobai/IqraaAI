@@ -1,0 +1,5 @@
+$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineEndpoint.schema.json
+name: iqraaai-quran-stt
+auth_mode: key
+description: Quran STT (tarteel-ai/whisper-base-ar-quran) custom container endpoint.
+

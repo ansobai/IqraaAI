@@ -1,0 +1,31 @@
+$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineDeployment.schema.json
+name: blue
+endpoint_name: iqraaai-quran-stt
+
+# IMPORTANT: replace with your ACR login server + image tag.
+environment:
+  image: <YOUR_ACR_LOGIN_SERVER>/iqraaai-quran-stt:latest
+  inference_config:
+    scoring_route:
+      path: /score
+      port: 8010
+    liveness_route:
+      path: /healthz
+      port: 8010
+    readiness_route:
+      path: /healthz
+      port: 8010
+
+environment_variables:
+  PORT: "8010"
+  STT_MODEL_ID: tarteel-ai/whisper-base-ar-quran
+  STT_LANGUAGE: ar
+  STT_TASK: transcribe
+  # Optional auth (recommended when endpoint is reachable outside your VNet):
+  # STT_AUTH_TOKEN: <shared-secret>
+
+instance_type: Standard_DS3_v2
+instance_count: 1
+
+request_settings:
+  request_timeout_ms: 60000

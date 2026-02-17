@@ -284,6 +284,46 @@ export default function SurahScreen() {
     surahId: id,
   });
   const quoteFeatureEnabled = !isMini && !tasmee.isRunning;
+  const quoteVerseSequence = useMemo<QuoteVerseSelection[]>(
+    () =>
+      PAGES.flatMap((pageItem) =>
+        pageItem.surahs.flatMap((surah) => {
+          const parsedSurahId = Number(surah.chapterNumber);
+          const safeSurahId = Number.isFinite(parsedSurahId) ? parsedSurahId : 1;
+          const surahName = surah.titleAr?.trim() || "";
+
+          return surah.text.map((verse) => ({
+            surahId: safeSurahId,
+            surahName,
+            verseNumber: String(verse.verseNumber ?? ""),
+            verseText: verse.text ?? "",
+            pageNumber: pageItem.pageNumber,
+            lineNumber: 0,
+          }));
+        }),
+      ),
+    [],
+  );
+  const selectedQuoteIndex = useMemo(() => {
+    if (!quoteSelection) return -1;
+
+    const exactMatchIndex = quoteVerseSequence.findIndex(
+      (verse) =>
+        verse.surahId === quoteSelection.surahId &&
+        verse.verseNumber === quoteSelection.verseNumber &&
+        verse.pageNumber === quoteSelection.pageNumber,
+    );
+    if (exactMatchIndex !== -1) return exactMatchIndex;
+
+    return quoteVerseSequence.findIndex(
+      (verse) =>
+        verse.surahId === quoteSelection.surahId &&
+        verse.verseNumber === quoteSelection.verseNumber,
+    );
+  }, [quoteSelection, quoteVerseSequence]);
+  const canGoToPreviousQuote = selectedQuoteIndex > 0;
+  const canGoToNextQuote =
+    selectedQuoteIndex !== -1 && selectedQuoteIndex < quoteVerseSequence.length - 1;
 
   useEffect(() => {
     if (!quoteFeatureEnabled) {
@@ -438,6 +478,14 @@ export default function SurahScreen() {
   const handleCloseQuotePreview = useCallback(() => {
     setQuoteSelection(null);
   }, []);
+  const handlePreviousQuote = useCallback(() => {
+    if (!canGoToPreviousQuote) return;
+    setQuoteSelection(quoteVerseSequence[selectedQuoteIndex - 1] ?? null);
+  }, [canGoToPreviousQuote, quoteVerseSequence, selectedQuoteIndex]);
+  const handleNextQuote = useCallback(() => {
+    if (!canGoToNextQuote) return;
+    setQuoteSelection(quoteVerseSequence[selectedQuoteIndex + 1] ?? null);
+  }, [canGoToNextQuote, quoteVerseSequence, selectedQuoteIndex]);
 
   const renderPage = useCallback(
     ({ item }: { item: number }) => {
@@ -1002,6 +1050,10 @@ export default function SurahScreen() {
         visible={quoteSelection != null}
         quote={quoteSelection}
         onClose={handleCloseQuotePreview}
+        onPreviousVerse={handlePreviousQuote}
+        onNextVerse={handleNextQuote}
+        canGoPreviousVerse={canGoToPreviousQuote}
+        canGoNextVerse={canGoToNextQuote}
       />
     </SafeAreaView>
   );

@@ -78,6 +78,16 @@ const FIRST_PAGES_SCALE = NORMAL_SCALE;
 const MINI_SCALE = 0.85;
 const MINI_TRIGGER_SCALE = 0.7;
 const MINI_ANIMATION_DURATION_MS = 160;
+const MINI_PAGE_TOP_GAP = 38;
+const MINI_UI_BG = "#E3F4F2";
+const MINI_UI_BORDER = "#BDDCD8";
+const MINI_UI_ACCENT = "#1F8E89";
+const MINI_UI_TEXT = "#1B4E52";
+const MINI_UI_PLACEHOLDER = "#6B8F8D";
+const MINI_MENU_BG = "#CFE7E4";
+const MINI_MENU_BORDER = "#A7CFCC";
+const MINI_PAGE_CARD_BG = "#F2FAF8";
+const MINI_PAGE_CARD_BORDER = "#CFE5E2";
 const MIN_PINCH_SCALE = 0.5;
 const MAX_PINCH_SCALE = 3;
 const DOUBLE_TAP_WINDOW_MS = 180;
@@ -477,7 +487,9 @@ export default function SurahScreen() {
   const horizontalPadding = isLandscape
     ? LANDSCAPE_HORIZONTAL_PADDING
     : PAGE_HORIZONTAL_PADDING;
-  const topPadding = isLandscape ? LANDSCAPE_TOP_PADDING : PAGE_TOP_PADDING;
+  const topPadding =
+    (isLandscape ? LANDSCAPE_TOP_PADDING : PAGE_TOP_PADDING) +
+    (isMini && !isLandscape ? MINI_PAGE_TOP_GAP : 0);
   const bottomPadding = isLandscape
     ? LANDSCAPE_BOTTOM_PADDING
     : PAGE_BOTTOM_PADDING;
@@ -514,7 +526,7 @@ export default function SurahScreen() {
 
       {isMini ? (
         <View
-          className="pt-10 pb-1"
+          className="pt-12 pb-1"
           pointerEvents="box-none"
           style={{
             position: "absolute",
@@ -526,12 +538,16 @@ export default function SurahScreen() {
           }}
         >
           <View className="px-5 mb-1">
-            <View className="flex-row-reverse bg-[#F0EBE0] rounded-full px-4 py-2 items-center gap-2 border border-[#E8E1D1]">
-              <Ionicons name="search" size={18} color="#8F7E5E" />
+            <View
+              className="flex-row-reverse rounded-full px-4 py-2 items-center gap-2 border"
+              style={{ backgroundColor: MINI_UI_BG, borderColor: MINI_UI_BORDER }}
+            >
+              <Ionicons name="search" size={18} color={MINI_UI_ACCENT} />
               <TextInput
                 placeholder="بحث في السور..."
-                placeholderTextColor="#8F7E5E"
-                className="flex-1 text-right text-base text-[#1F1F1F] font-uthmanic"
+                placeholderTextColor={MINI_UI_PLACEHOLDER}
+                className="flex-1 text-right text-base font-uthmanic"
+                style={{ color: MINI_UI_TEXT }}
                 value={query}
                 onChangeText={setQuery}
               />
@@ -545,7 +561,7 @@ export default function SurahScreen() {
             >
               {isSearching ? (
                 <View className="py-6 items-center justify-center">
-                  <ActivityIndicator color="#2E8B57" />
+                  <ActivityIndicator color={MINI_UI_ACCENT} />
                 </View>
               ) : results.length === 0 ? (
                 <View className="py-6 items-center justify-center px-5">
@@ -587,7 +603,7 @@ export default function SurahScreen() {
                         ) : (
                           <View className="flex-1">
                             <View className="flex-row-reverse items-center gap-1 mb-0">
-                              <Text className="text-xl text-[#2E8B57] font-bold font-uthmanic">
+                              <Text className="text-xl font-bold font-uthmanic" style={{ color: MINI_UI_ACCENT }}>
                                 سورة {item.surahName}
                               </Text>
                               <Text className="text-2xl text-[#999] font-uthmanic">
@@ -632,8 +648,10 @@ export default function SurahScreen() {
             }}
           >
             <View
-              className="mx-6 mb-3 rounded-t-3xl bg-[#F0EBE0] border border-[#E8E1D1] px-10 py-3"
+              className="mx-6 mb-3 rounded-t-3xl border px-10 py-3"
               style={{
+                backgroundColor: MINI_MENU_BG,
+                borderColor: MINI_MENU_BORDER,
                 shadowColor: "#000",
                 shadowOpacity: 0.08,
                 shadowRadius: 12,
@@ -707,10 +725,10 @@ export default function SurahScreen() {
               style={[
                 isMini && {
                   padding: 8,
-                  backgroundColor: "#FFF7E8",
+                  backgroundColor: MINI_PAGE_CARD_BG,
                   borderRadius: 18,
                   borderWidth: 1,
-                  borderColor: "#E8E1D1",
+                  borderColor: MINI_PAGE_CARD_BORDER,
                   shadowColor: "#000",
                   shadowOpacity: 0.08,
                   shadowRadius: 10,

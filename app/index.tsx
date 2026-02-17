@@ -1,10 +1,12 @@
 // app/index.tsx
+import { useAuth } from "@clerk/clerk-expo";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Stack, useRouter } from "expo-router";
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Keyboard,
   Pressable,
@@ -21,24 +23,20 @@ import { getSurahIdForPageNumber } from "../utils/mushafData";
 import { SearchResult } from "../utils/searchUtils";
 import { toArabicNumber } from "../utils/toArabicNumbers";
 
-interface SurahItem {
-  id: number;
-  name: string;
-}
-
 // Surahs shown in the slider
 const SURAHS = ARABIC_SURAHS.map((name, i) => ({ id: i, name }));
 
 export default function Dashboard() {
+  const { isLoaded, isSignedIn, signOut } = useAuth();
   const router = useRouter();
   const [isRedirecting, setIsRedirecting] = useState(true);
   const { query, setQuery, results, isSearching } = useQuranSearch();
 
   const handleSearchResultPress = (result: SearchResult) => {
     if (result.type === "surah") {
-      router.push(`/(surahs)/${result.id}`);
+      router.push(`/${result.id}`);
     } else {
-      router.push(`/(surahs)/${result.surahId}?page=${result.pageNumber}`);
+      router.push(`/${result.surahId}?page=${result.pageNumber}`);
     }
   };
 
@@ -53,11 +51,11 @@ export default function Dashboard() {
         const surahId = getSurahIdForPageNumber(pageNumber);
 
         if (isActive) {
-          router.replace(`/(surahs)/${surahId}`);
+          router.replace(`/${surahId}`);
         }
       } catch {
         if (isActive) {
-          router.replace("/(surahs)/1");
+          router.replace("/1");
           setIsRedirecting(false);
         }
       }
@@ -80,7 +78,7 @@ export default function Dashboard() {
 
   const handleNavigation = (id: number) => {
     console.log("Navigating to Surah:", id);
-    router.push(`/(surahs)/${id}`);
+    router.push(`/${id}`);
   };
 
   return (
@@ -91,6 +89,26 @@ export default function Dashboard() {
         {/* TOP BAR */}
         <View className="flex-row-reverse items-center justify-between px-5 mb-5 z-20">
           <Pressable
+            onPress={() => {
+              const actions = [];
+              if (isLoaded && isSignedIn) {
+                actions.push({
+                  text: "Sign out",
+                  style: "destructive" as const,
+                  onPress: () => void signOut(),
+                });
+              } else {
+                actions.push({
+                  text: "Sign in",
+                  onPress: () => router.push("/(auth)/sign-in"),
+                });
+              }
+
+              Alert.alert("Menu", undefined, [
+                ...actions,
+                { text: "Cancel", style: "cancel" },
+              ]);
+            }}
             style={({ pressed }) => ({
               transform: [{ scale: pressed ? 0.9 : 1 }],
             })}
@@ -127,7 +145,7 @@ export default function Dashboard() {
               <FlatList
                 data={results}
                 keyExtractor={(item, index) => index.toString()}
-                contentContainerClassName="py-2"
+                contentContainerStyle={{ paddingVertical: 8 }}
                 keyboardShouldPersistTaps="handled"
                 renderItem={({ item }) => (
                   <Pressable
@@ -179,7 +197,7 @@ export default function Dashboard() {
             horizontal
             showsHorizontalScrollIndicator={false}
             inverted
-            contentContainerClassName="px-5 items-center"
+            contentContainerStyle={{ paddingHorizontal: 20, alignItems: "center" }}
             renderItem={({ item: s, index }) => {
               const isActive = index === 0;
               return (

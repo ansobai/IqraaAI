@@ -10,7 +10,7 @@ import {
 } from "react-native";
 
 type BannerSize = "sm" | "md" | "lg";
-export type BannerVariant = "default" | "left" | "right" | "page";
+export type BannerVariant = "default" | "left" | "right";
 
 const SIZE_STYLES: Record<
   BannerSize,
@@ -91,7 +91,6 @@ export default function SurahBanner({
 
   // Variant logic
   let imageSource;
-  let textWidthPercent = "100%";
   let textAlign: "center" | "left" | "right" = "center";
   
   switch (variant) {
@@ -100,12 +99,6 @@ export default function SurahBanner({
       break;
     case "right":
       imageSource = require("../assets/images/surah_name_border.png");
-      break;
-    case "page":
-      imageSource = require("../assets/images/surah_banner.png");
-      // Page banner is wide, text centered within the frame
-      textWidthPercent = "60%";
-      textAlign = "center";
       break;
     default:
       imageSource = require("../assets/images/surah_name_border.png");
@@ -153,7 +146,7 @@ export default function SurahBanner({
               fontSize: computedFontSize,
               lineHeight: computedLineHeight,
               textAlign,
-              width: (isLarge ? "100%" : textWidthPercent) as `${number}%`,
+              width: "100%",
               writingDirection: "rtl",
             },
             textStyle,

@@ -1,29 +1,56 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAuth } from "@clerk/clerk-expo";
 
 import type {
   TasmeeFeedbackDeltaEvent,
+  TasmeeFeedbackState,
+  TasmeeSessionCreateResponse,
   TasmeeSessionStatus,
+  TasmeeSessionStatusEvent,
   TasmeeTransportMode,
   TasmeeWordState,
 } from "../types/tasmee";
-import { createTasmeeSession, openTasmeeSocket, stopTasmeeSession, type TasmeeSocketConnection } from "../utils/tasmeeApi";
+import {
+  createTasmeeSession,
+  openTasmeeSocket,
+  resumeTasmeeSession,
+  sendTasmeeChunkOverSocket,
+  stopTasmeeSession,
+  type TasmeeSocketConnection,
+  uploadTasmeeChunk,
+} from "../utils/tasmeeApi";
+import {
+  dequeueChunk,
+  enqueueChunk,
+  type TasmeeQueuedChunk,
+} from "../utils/tasmeeChunkQueue";
 import { loadMushafPage, type MushafPageLines } from "../utils/mushafData";
 import {
-  getTasmeeStartFailurePolicy,
-  isDeltaForActiveTasmeeSession,
-} from "../utils/tasmeeSessionPolicy";
+  evaluateFeedbackDeltaGate,
+  isSpeechWindowOpen,
+} from "../utils/tasmeeFeedbackGate";
 import { applyFeedbackDelta, buildTasmeeWordStates } from "../utils/tasmeeState";
+import { useTasmeeAudioStream } from "./useTasmeeAudioStream";
 
 type UseTasmeeSessionArgs = {
   pageNumber: number;
   surahId: number;
 };
 
-const MOCK_ANCHOR_DELAY_MS = 1200;
-const MOCK_REVEAL_INTERVAL_MS = 420;
-const ANCHOR_CONFIDENCE_THRESHOLD = 0.72;
-const SOCKET_INTERRUPTED_MESSAGE =
-  "Tasmee connection was interrupted. Please tap the mic to retry.";
+const REVEAL_CONFIDENCE_THRESHOLD = 0.9;
+const RECENT_SPEECH_WINDOW_MS = 1200;
+const AUDIO_SPEECH_LEVEL_DB_THRESHOLD = -48;
+const AUDIO_CHUNK_DURATION_MS = 300;
+const MAX_PENDING_AUDIO_CHUNKS = 16;
+const FAST_FORWARD_QUEUE_THRESHOLD = 12;
+const MIN_CONSECUTIVE_SPEECH_CHUNKS = 1;
+const LOCAL_METERING_STALE_MS = 3000;
+const DEBUG_TASMEE = true;
+
+const logTasmee = (...args: unknown[]) => {
+  if (!DEBUG_TASMEE) return;
+  console.log("[tasmee-debug]", ...args);
+};
 
 const countPageWords = (pageData: MushafPageLines | null) => {
   if (!pageData) return 0;
@@ -34,41 +61,70 @@ const countPageWords = (pageData: MushafPageLines | null) => {
   );
 };
 
-const clearTimeoutIfSet = (
-  timeoutRef: { current: ReturnType<typeof setTimeout> | null },
-) => {
-  if (!timeoutRef.current) return;
-  clearTimeout(timeoutRef.current);
-  timeoutRef.current = null;
-};
+const toErrorMessage = (error: unknown, fallback: string) =>
+  error instanceof Error ? error.message : fallback;
 
-const clearIntervalIfSet = (
-  intervalRef: { current: ReturnType<typeof setInterval> | null },
-) => {
-  if (!intervalRef.current) return;
-  clearInterval(intervalRef.current);
-  intervalRef.current = null;
-};
+const isChunkEndpointUnsupportedError = (message: string) =>
+  /(^|\s)(404|not found)(\s|$)/i.test(message);
 
 export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) => {
+  const { getToken } = useAuth();
   const [status, setStatus] = useState<TasmeeSessionStatus>("idle");
   const [transportMode, setTransportMode] = useState<TasmeeTransportMode | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [recognizerMode, setRecognizerMode] = useState<string | null>(null);
   const [pageData, setPageData] = useState<MushafPageLines | null>(null);
   const [anchorWordIndex, setAnchorWordIndex] = useState<number | null>(null);
   const [revealedWordIndexes, setRevealedWordIndexes] = useState<number[]>([]);
+  const [feedbackState, setFeedbackState] =
+    useState<TasmeeFeedbackState>("listening");
+  const [lastAcceptedAtMs, setLastAcceptedAtMs] = useState<number | null>(null);
+  const [isSpeechDetected, setIsSpeechDetected] = useState(false);
+  const [lastDeltaEvent, setLastDeltaEvent] = useState<TasmeeFeedbackDeltaEvent | null>(
+    null,
+  );
+  const [lastStatusEvent, setLastStatusEvent] =
+    useState<TasmeeSessionStatusEvent | null>(null);
+  const [lastLocalActivity, setLastLocalActivity] = useState<
+    | {
+        seq: number;
+        hasSpeech: boolean | null;
+        levelDb: number | null;
+        timestampMs: number;
+      }
+    | null
+  >(null);
 
   const socketRef = useRef<TasmeeSocketConnection | null>(null);
   const statusRef = useRef<TasmeeSessionStatus>("idle");
   const transportModeRef = useRef<TasmeeTransportMode | null>(null);
   const sessionIdRef = useRef<string | null>(null);
+  const sessionInfoRef = useRef<TasmeeSessionCreateResponse | null>(null);
   const anchorWordIndexRef = useRef<number | null>(null);
   const revealedWordIndexesRef = useRef<number[]>([]);
   const activePageNumberRef = useRef<number>(pageNumber);
   const totalWordCountRef = useRef<number>(0);
-  const mockAnchorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const mockRevealIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const feedbackStateRef = useRef<TasmeeFeedbackState>("listening");
+  const lastServerSeqAckRef = useRef<number>(-1);
+  const lastSpeechDetectedAtRef = useRef<number | null>(null);
+  const localSpeechStreakRef = useRef<number>(0);
+  const lastLocalMeteringAtRef = useRef<number | null>(null);
+  const wsAudioUploadEnabledRef = useRef(false);
+  const pendingChunksRef = useRef<
+    TasmeeQueuedChunk<{
+      seq: number;
+      audioBase64: string;
+      mimeType: string;
+      durationMs: number;
+      levelDb: number | null;
+      hasSpeech: boolean | null;
+      timestampMs: number;
+      chunkStartedAtMs: number;
+      chunkEndedAtMs: number;
+    }>[]
+  >([]);
+  const uploadWorkerRunningRef = useRef(false);
 
   useEffect(() => {
     statusRef.current = status;
@@ -90,9 +146,23 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
     revealedWordIndexesRef.current = revealedWordIndexes;
   }, [revealedWordIndexes]);
 
-  const clearMockProgressTimers = useCallback(() => {
-    clearTimeoutIfSet(mockAnchorTimeoutRef);
-    clearIntervalIfSet(mockRevealIntervalRef);
+  useEffect(() => {
+    feedbackStateRef.current = feedbackState;
+  }, [feedbackState]);
+
+  const tokenProvider = useCallback(
+    async () => (await getToken()) ?? null,
+    [getToken],
+  );
+
+  const updateSpeechWindowState = useCallback(() => {
+    const detected = isSpeechWindowOpen(
+      lastSpeechDetectedAtRef.current,
+      Date.now(),
+      RECENT_SPEECH_WINDOW_MS,
+    );
+    setIsSpeechDetected((current) => (current === detected ? current : detected));
+    return detected;
   }, []);
 
   const clearTransport = useCallback(() => {
@@ -100,94 +170,354 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
       socketRef.current.close();
       socketRef.current = null;
     }
-    clearMockProgressTimers();
-  }, [clearMockProgressTimers]);
-
-  const applyDeltaEvent = useCallback((event: TasmeeFeedbackDeltaEvent) => {
-    if (!isDeltaForActiveTasmeeSession(sessionIdRef.current, event)) {
-      return;
-    }
-
-    const next = applyFeedbackDelta(
-      {
-        anchorWordIndex: anchorWordIndexRef.current,
-        revealedWordIndexes: revealedWordIndexesRef.current,
-      },
-      event,
-      totalWordCountRef.current,
-      ANCHOR_CONFIDENCE_THRESHOLD,
-    );
-
-    if (next.anchorWordIndex !== anchorWordIndexRef.current) {
-      anchorWordIndexRef.current = next.anchorWordIndex;
-      setAnchorWordIndex(next.anchorWordIndex);
-    }
-
-    if (next.revealedWordIndexes !== revealedWordIndexesRef.current) {
-      revealedWordIndexesRef.current = next.revealedWordIndexes;
-      setRevealedWordIndexes(next.revealedWordIndexes);
-    }
-
-    if (next.anchorWordIndex == null) {
-      setStatus("listening");
-      return;
-    }
-
-    setStatus("active");
+    sessionInfoRef.current = null;
   }, []);
-
-  const startMockProgress = useCallback((currentSessionId: string) => {
-    const totalWordCount = totalWordCountRef.current;
-    if (totalWordCount <= 0) {
-      setStatus("error");
-      setErrorMessage("Current page has no line words for tasmee.");
-      return;
-    }
-
-    setTransportMode("mock");
-    setStatus("listening");
-
-    mockAnchorTimeoutRef.current = setTimeout(() => {
-      const nextAnchor =
-        totalWordCount > 6 ? Math.floor(totalWordCount * 0.35) : 0;
-
-      applyDeltaEvent({
-        type: "feedback.delta",
-        session_id: currentSessionId,
-        start_anchor_word_index: nextAnchor,
-        start_anchor_confidence: 0.92,
-        confirmed_word_indexes: [nextAnchor],
-      });
-
-      let cursor = nextAnchor + 1;
-      mockRevealIntervalRef.current = setInterval(() => {
-        if (cursor >= totalWordCount) {
-          clearIntervalIfSet(mockRevealIntervalRef);
-          return;
-        }
-
-        applyDeltaEvent({
-          type: "feedback.delta",
-          session_id: currentSessionId,
-          confirmed_word_indexes: [cursor],
-        });
-        cursor += 1;
-      }, MOCK_REVEAL_INTERVAL_MS);
-    }, MOCK_ANCHOR_DELAY_MS);
-  }, [applyDeltaEvent]);
 
   const resetProgress = useCallback(() => {
     anchorWordIndexRef.current = null;
     revealedWordIndexesRef.current = [];
+    lastServerSeqAckRef.current = -1;
+    lastSpeechDetectedAtRef.current = null;
+    localSpeechStreakRef.current = 0;
+    lastLocalMeteringAtRef.current = null;
+    pendingChunksRef.current = [];
+    uploadWorkerRunningRef.current = false;
+    wsAudioUploadEnabledRef.current = false;
+
     setAnchorWordIndex(null);
     setRevealedWordIndexes([]);
+    setFeedbackState("listening");
+    setLastAcceptedAtMs(null);
+    setIsSpeechDetected(false);
+    setRecognizerMode(null);
   }, []);
+
+  const markSpeechDetected = useCallback((timestampMs: number) => {
+    lastSpeechDetectedAtRef.current = timestampMs;
+    setIsSpeechDetected(true);
+  }, []);
+
+  const applyLocalSpeechActivity = useCallback(
+    (hasSpeech: boolean | null, timestampMs: number) => {
+      if (hasSpeech == null) {
+        return;
+      }
+      if (!hasSpeech) {
+        localSpeechStreakRef.current = 0;
+        return;
+      }
+
+      localSpeechStreakRef.current += 1;
+      if (localSpeechStreakRef.current < MIN_CONSECUTIVE_SPEECH_CHUNKS) {
+        return;
+      }
+
+      markSpeechDetected(timestampMs);
+    },
+    [markSpeechDetected],
+  );
+
+  const applyStatusEvent = useCallback(
+    (event: TasmeeSessionStatusEvent) => {
+      if (
+        statusRef.current === "idle" ||
+        statusRef.current === "stopped" ||
+        statusRef.current === "error"
+      ) {
+        return;
+      }
+      logTasmee("ws status", event);
+      setLastStatusEvent(event);
+      if (event.recognizer_mode) {
+        setRecognizerMode(event.recognizer_mode);
+      }
+      wsAudioUploadEnabledRef.current = event.capabilities?.ws_audio_upload === true;
+      if (event.seq_ack != null && Number.isFinite(event.seq_ack)) {
+        if (event.seq_ack < lastServerSeqAckRef.current) {
+          logTasmee("drop status out-of-order", {
+            seqAck: event.seq_ack,
+            lastSeqAck: lastServerSeqAckRef.current,
+          });
+          return;
+        }
+        lastServerSeqAckRef.current = Math.max(
+          lastServerSeqAckRef.current,
+          event.seq_ack,
+        );
+      }
+      const nowMs = Date.now();
+      const shouldUseServerSpeechFallback =
+        lastLocalMeteringAtRef.current == null ||
+        nowMs - lastLocalMeteringAtRef.current > LOCAL_METERING_STALE_MS;
+      if (shouldUseServerSpeechFallback && event.has_speech) {
+        markSpeechDetected(nowMs);
+      }
+
+      const localSpeechOpen = updateSpeechWindowState();
+      const nextFeedbackState =
+        !localSpeechOpen && event.state === "reciting" ? "silent" : event.state;
+
+      if (nextFeedbackState === "paused") {
+        lastSpeechDetectedAtRef.current = null;
+        localSpeechStreakRef.current = 0;
+        setIsSpeechDetected(false);
+      }
+
+      setFeedbackState(nextFeedbackState);
+      if (nextFeedbackState === "paused") {
+        setStatus("paused");
+      } else if (
+        nextFeedbackState === "reciting" ||
+        nextFeedbackState === "processing"
+      ) {
+        setStatus("active");
+      } else {
+        setStatus("listening");
+      }
+    },
+    [markSpeechDetected, updateSpeechWindowState],
+  );
+
+  const applyDeltaEvent = useCallback(
+    (event: TasmeeFeedbackDeltaEvent) => {
+      if (
+        statusRef.current === "idle" ||
+        statusRef.current === "stopped" ||
+        statusRef.current === "error"
+      ) {
+        return;
+      }
+
+      setLastDeltaEvent(event);
+      if (event.recognizer_mode) {
+        setRecognizerMode(event.recognizer_mode);
+      }
+      const nowMs = Date.now();
+      const isOutOfOrderDelta =
+        event.seq_ack != null &&
+        Number.isFinite(event.seq_ack) &&
+        event.seq_ack < lastServerSeqAckRef.current;
+      const shouldUseServerSpeechFallback =
+        lastLocalMeteringAtRef.current == null ||
+        nowMs - lastLocalMeteringAtRef.current > LOCAL_METERING_STALE_MS;
+      if (
+        shouldUseServerSpeechFallback &&
+        event.has_speech === true &&
+        !isOutOfOrderDelta
+      ) {
+        markSpeechDetected(nowMs);
+      }
+      updateSpeechWindowState();
+
+      const gate = evaluateFeedbackDeltaGate({
+        event,
+        lastSeqAck: lastServerSeqAckRef.current,
+        lastSpeechDetectedAtMs: lastSpeechDetectedAtRef.current,
+        nowMs,
+        speechWindowMs: RECENT_SPEECH_WINDOW_MS,
+        confidenceThreshold: REVEAL_CONFIDENCE_THRESHOLD,
+      });
+      logTasmee("ws delta + gate", {
+        delta: event,
+        gate,
+        lastSpeechDetectedAtMs: lastSpeechDetectedAtRef.current,
+      });
+
+      lastServerSeqAckRef.current = gate.nextSeqAck;
+      if (!gate.shouldApply) {
+        logTasmee("delta blocked", {
+          feedbackState: gate.feedbackState,
+          seqAck: event.seq_ack ?? null,
+          hasSpeech: event.has_speech ?? null,
+          confidence: event.confidence ?? event.start_anchor_confidence ?? null,
+          lastSpeechDetectedAtMs: lastSpeechDetectedAtRef.current,
+          nowMs,
+        });
+        setFeedbackState(gate.feedbackState);
+        if (gate.feedbackState === "silent") {
+          setStatus("listening");
+        }
+        return;
+      }
+
+      const previousAnchorWordIndex = anchorWordIndexRef.current;
+      const previousRevealedCount = revealedWordIndexesRef.current.length;
+      const next = applyFeedbackDelta(
+        {
+          anchorWordIndex: anchorWordIndexRef.current,
+          revealedWordIndexes: revealedWordIndexesRef.current,
+        },
+        event,
+        totalWordCountRef.current,
+        REVEAL_CONFIDENCE_THRESHOLD,
+      );
+
+      if (next.anchorWordIndex !== anchorWordIndexRef.current) {
+        anchorWordIndexRef.current = next.anchorWordIndex;
+        setAnchorWordIndex(next.anchorWordIndex);
+      }
+
+      if (next.revealedWordIndexes !== revealedWordIndexesRef.current) {
+        revealedWordIndexesRef.current = next.revealedWordIndexes;
+        setRevealedWordIndexes(next.revealedWordIndexes);
+      }
+      const revealAppliedAtMs = Date.now();
+      logTasmee("delta applied progress", {
+        seqAck: event.seq_ack ?? null,
+        chunkSeq: event.chunk_seq ?? null,
+        anchorBefore: previousAnchorWordIndex,
+        anchorAfter: next.anchorWordIndex,
+        revealedBefore: previousRevealedCount,
+        revealedAfter: next.revealedWordIndexes.length,
+        confirmedFromDelta: event.confirmed_word_indexes?.length ?? 0,
+        client_delta_received_at_ms: nowMs,
+        client_reveal_applied_at_ms: revealAppliedAtMs,
+      });
+
+      setFeedbackState(gate.feedbackState);
+      setLastAcceptedAtMs(nowMs);
+      setStatus(next.anchorWordIndex == null ? "listening" : "active");
+    },
+    [markSpeechDetected, updateSpeechWindowState],
+  );
+
+  const drainPendingChunks = useCallback(async () => {
+    const currentSessionId = sessionIdRef.current;
+    if (!currentSessionId || uploadWorkerRunningRef.current) return;
+    uploadWorkerRunningRef.current = true;
+
+    try {
+      while (true) {
+        if (
+          statusRef.current === "idle" ||
+          statusRef.current === "stopped" ||
+          statusRef.current === "error"
+        ) {
+          pendingChunksRef.current = [];
+          break;
+        }
+
+        if (pendingChunksRef.current.length > FAST_FORWARD_QUEUE_THRESHOLD) {
+          pendingChunksRef.current = pendingChunksRef.current.slice(-FAST_FORWARD_QUEUE_THRESHOLD);
+        }
+
+        const next = dequeueChunk(pendingChunksRef.current);
+        pendingChunksRef.current = next.nextQueue;
+        if (!next.item) break;
+
+        const payload = next.item.payload;
+        const clientSentAtMs = Date.now();
+        const uploadBody = {
+          seq: payload.seq,
+          audio_base64: payload.audioBase64,
+          mime_type: payload.mimeType,
+          duration_ms: payload.durationMs,
+          level_db: payload.levelDb ?? undefined,
+          has_speech: payload.hasSpeech ?? undefined,
+          client_chunk_started_at_ms: payload.chunkStartedAtMs,
+          client_chunk_ended_at_ms: payload.chunkEndedAtMs,
+          client_sent_at_ms: clientSentAtMs,
+        };
+
+        const wsSent =
+          wsAudioUploadEnabledRef.current &&
+          sendTasmeeChunkOverSocket(socketRef.current, {
+            type: "chunk.upload",
+            ...uploadBody,
+          });
+
+        logTasmee("chunk upload dispatch", {
+          seq: payload.seq,
+          wsSent,
+          queueDepth: pendingChunksRef.current.length,
+          client_chunk_started_at_ms: payload.chunkStartedAtMs,
+          client_chunk_ended_at_ms: payload.chunkEndedAtMs,
+          client_sent_at_ms: clientSentAtMs,
+        });
+
+        if (wsSent) {
+          setTransportMode("websocket");
+          continue;
+        }
+
+        const response = await uploadTasmeeChunk(
+          currentSessionId,
+          uploadBody,
+          sessionInfoRef.current,
+          tokenProvider,
+        );
+        setTransportMode("http");
+
+        if (response.seq_ack < lastServerSeqAckRef.current) {
+          logTasmee("drop upload ack out-of-order", {
+            ack: response.seq_ack,
+            lastSeqAck: lastServerSeqAckRef.current,
+          });
+          continue;
+        }
+        lastServerSeqAckRef.current = response.seq_ack;
+      }
+    } catch (error) {
+      if (statusRef.current === "idle" || statusRef.current === "stopped") {
+        return;
+      }
+      logTasmee("upload chunk error", error);
+      const message = toErrorMessage(error, "Failed to upload tasmee audio chunk.");
+      if (isChunkEndpointUnsupportedError(message)) {
+        clearTransport();
+        statusRef.current = "error";
+        transportModeRef.current = null;
+        setTransportMode(null);
+        setSessionId(null);
+        setStatus("error");
+        setErrorMessage(
+          "Tasmee service is outdated (missing /chunks). Deploy the latest tasmee backend.",
+        );
+        return;
+      }
+      setStatus("error");
+      setErrorMessage(message);
+    } finally {
+      uploadWorkerRunningRef.current = false;
+      if (pendingChunksRef.current.length > 0 && sessionIdRef.current) {
+        void drainPendingChunks();
+      }
+    }
+  }, [clearTransport, tokenProvider]);
+
+  const enqueueAudioChunk = useCallback(
+    async (payload: {
+      seq: number;
+      audioBase64: string;
+      mimeType: string;
+      durationMs: number;
+      levelDb: number | null;
+      hasSpeech: boolean | null;
+      timestampMs: number;
+      chunkStartedAtMs: number;
+      chunkEndedAtMs: number;
+    }) => {
+      pendingChunksRef.current = enqueueChunk(
+        pendingChunksRef.current,
+        payload,
+        payload.seq,
+        MAX_PENDING_AUDIO_CHUNKS,
+      );
+      void drainPendingChunks();
+    },
+    [drainPendingChunks],
+  );
 
   const startSession = useCallback(async () => {
     if (statusRef.current === "starting") return;
-    if (statusRef.current === "listening" || statusRef.current === "active") return;
+    if (
+      statusRef.current === "listening" ||
+      statusRef.current === "active" ||
+      statusRef.current === "paused"
+    ) {
+      return;
+    }
 
-    statusRef.current = "starting";
     setStatus("starting");
     setErrorMessage(null);
     clearTransport();
@@ -201,85 +531,119 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
     }
 
     totalWordCountRef.current = countPageWords(effectivePageData);
-
-    const currentSessionId = `tasmee-${Date.now()}`;
-    sessionIdRef.current = currentSessionId;
-    setSessionId(currentSessionId);
+    if (totalWordCountRef.current <= 0) {
+      setStatus("error");
+      setErrorMessage("Current page has no line words for tasmee.");
+      return;
+    }
 
     try {
+      logTasmee("start session", { pageNumber, surahId });
       const remoteSession = await createTasmeeSession({
         page_number: pageNumber,
         surah_id: surahId,
-      });
+      }, tokenProvider);
+      logTasmee("session created", remoteSession);
 
-      sessionIdRef.current = remoteSession.session_id;
+      sessionInfoRef.current = remoteSession;
       setSessionId(remoteSession.session_id);
       setTransportMode("websocket");
-      statusRef.current = "listening";
       setStatus("listening");
+      setFeedbackState("listening");
 
       socketRef.current = openTasmeeSocket(remoteSession, {
         onDelta: applyDeltaEvent,
+        onStatus: applyStatusEvent,
         onClose: () => {
-          if (statusRef.current === "idle" || statusRef.current === "stopped") {
+          if (
+            statusRef.current === "idle" ||
+            statusRef.current === "stopped" ||
+            statusRef.current === "error"
+          ) {
             return;
           }
-          statusRef.current = "error";
+          logTasmee("socket closed unexpectedly");
           setStatus("error");
-          setErrorMessage(SOCKET_INTERRUPTED_MESSAGE);
-          setTransportMode("http");
+          setErrorMessage("Tasmee connection closed.");
+          setTransportMode(null);
         },
         onError: (error) => {
-          if (statusRef.current === "idle" || statusRef.current === "stopped") {
+          if (
+            statusRef.current === "idle" ||
+            statusRef.current === "stopped" ||
+            statusRef.current === "error"
+          ) {
             return;
           }
-          statusRef.current = "error";
+          logTasmee("socket error", error.message);
+          setErrorMessage(error.message);
           setStatus("error");
-          setErrorMessage(error.message || SOCKET_INTERRUPTED_MESSAGE);
-          setTransportMode("http");
+          setTransportMode(null);
         },
       });
       return;
-    } catch {
-      const startFailurePolicy = getTasmeeStartFailurePolicy();
-      if (startFailurePolicy.useMockProgress) {
-        startMockProgress(currentSessionId);
-        return;
-      }
-
-      sessionIdRef.current = null;
-      setSessionId(null);
+    } catch (error) {
+      logTasmee("start session error", error);
+      setStatus("error");
       setTransportMode(null);
-      statusRef.current = startFailurePolicy.nextStatus;
-      setStatus(startFailurePolicy.nextStatus);
-      setErrorMessage(startFailurePolicy.errorMessage);
-      return;
+      setErrorMessage(
+        toErrorMessage(error, "Failed to start tasmee session."),
+      );
     }
-  }, [applyDeltaEvent, clearTransport, pageData, pageNumber, resetProgress, startMockProgress, surahId]);
+  }, [
+    applyDeltaEvent,
+    applyStatusEvent,
+    clearTransport,
+    pageData,
+    pageNumber,
+    resetProgress,
+    surahId,
+    tokenProvider,
+  ]);
 
   const stopSession = useCallback(async () => {
     const currentSessionId = sessionIdRef.current;
-    const currentTransport = transportModeRef.current;
-
     statusRef.current = "idle";
     transportModeRef.current = null;
     sessionIdRef.current = null;
+
     setStatus("idle");
     setTransportMode(null);
     setSessionId(null);
     setErrorMessage(null);
-
+    resetProgress();
     clearTransport();
 
-    if (currentSessionId && currentTransport !== "mock") {
+    if (currentSessionId) {
       try {
-        await stopTasmeeSession(currentSessionId);
+        logTasmee("stop session", { sessionId: currentSessionId });
+        await stopTasmeeSession(currentSessionId, tokenProvider);
       } catch {
         // Stopping should still reset UI state when network call fails.
       }
     }
-    resetProgress();
-  }, [clearTransport, resetProgress]);
+  }, [clearTransport, resetProgress, tokenProvider]);
+
+  const resumeSession = useCallback(async () => {
+    const currentSessionId = sessionIdRef.current;
+    if (!currentSessionId) return;
+    if (statusRef.current !== "paused" && feedbackStateRef.current !== "paused") {
+      return;
+    }
+
+    try {
+      await resumeTasmeeSession(currentSessionId, tokenProvider);
+      lastSpeechDetectedAtRef.current = null;
+      localSpeechStreakRef.current = 0;
+      setIsSpeechDetected(false);
+      setFeedbackState("listening");
+      setStatus(anchorWordIndexRef.current == null ? "listening" : "active");
+      setErrorMessage(null);
+    } catch (error) {
+      setStatus("error");
+      setErrorMessage(toErrorMessage(error, "Failed to resume tasmee session."));
+    }
+  }, [tokenProvider]);
 
   useEffect(() => {
     let isMounted = true;
@@ -296,7 +660,9 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
 
   useEffect(() => {
     if (
-      (statusRef.current === "listening" || statusRef.current === "active") &&
+      (statusRef.current === "listening" ||
+        statusRef.current === "active" ||
+        statusRef.current === "paused") &&
       activePageNumberRef.current !== pageNumber
     ) {
       void stopSession();
@@ -310,6 +676,64 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
     [clearTransport],
   );
 
+  const isRunning =
+    status === "starting" ||
+    status === "listening" ||
+    status === "active" ||
+    status === "paused";
+  const isCapturingAudio =
+    status === "starting" || status === "listening" || status === "active";
+
+  useEffect(() => {
+    if (!isRunning) {
+      setIsSpeechDetected(false);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      const detected = updateSpeechWindowState();
+      if (!detected && feedbackStateRef.current === "reciting") {
+        logTasmee("speech window expired -> silent", {
+          lastSpeechDetectedAtMs: lastSpeechDetectedAtRef.current,
+          nowMs: Date.now(),
+        });
+        setFeedbackState("silent");
+      }
+    }, 250);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [isRunning, updateSpeechWindowState]);
+
+  const audioStream = useTasmeeAudioStream({
+    enabled: isCapturingAudio && sessionId != null,
+    sessionId,
+    onChunk: enqueueAudioChunk,
+    onSpeechActivity: (activity) => {
+      logTasmee("local speech activity", activity);
+      setLastLocalActivity(activity);
+      if (activity.levelDb != null) {
+        lastLocalMeteringAtRef.current = activity.timestampMs;
+      }
+      applyLocalSpeechActivity(activity.hasSpeech, activity.timestampMs);
+    },
+    onError: (error) => {
+      if (
+        statusRef.current === "idle" ||
+        statusRef.current === "stopped" ||
+        statusRef.current === "error"
+      ) {
+        return;
+      }
+      setStatus("error");
+      setErrorMessage(error.message);
+    },
+    chunkDurationMs: AUDIO_CHUNK_DURATION_MS,
+    speechLevelDbThreshold: AUDIO_SPEECH_LEVEL_DB_THRESHOLD,
+    enableAutoCalibration: true,
+  });
+
   const totalWordCount = useMemo(() => countPageWords(pageData), [pageData]);
   const wordStates: TasmeeWordState[] = useMemo(
     () =>
@@ -317,23 +741,42 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
     [anchorWordIndex, revealedWordIndexes, totalWordCount],
   );
 
-  const isRunning = status === "starting" || status === "listening" || status === "active";
   const isLocked = anchorWordIndex != null;
-  const isListeningForStart = isRunning && anchorWordIndex == null;
+  const isPaused = status === "paused" || feedbackState === "paused";
+  const isListeningForStart = isRunning && !isPaused && anchorWordIndex == null;
+  const correctWordCount = revealedWordIndexes.length;
 
   return {
     status,
+    feedbackState,
     transportMode,
     sessionId,
     errorMessage,
+    recognizerMode,
     pageData,
     anchorWordIndex,
     revealedWordIndexes,
     wordStates,
+    totalWordCount,
+    correctWordCount,
+    lastAcceptedAtMs,
+    isSpeechDetected,
     isRunning,
+    isPaused,
     isLocked,
     isListeningForStart,
+    debug: {
+      audio: {
+        lastLevelDb: audioStream.lastLevelDb,
+        noiseFloorDb: audioStream.noiseFloorDb,
+        effectiveSpeechLevelDbThreshold: audioStream.effectiveSpeechLevelDbThreshold,
+      },
+      lastLocalActivity,
+      lastDeltaEvent,
+      lastStatusEvent,
+    },
     startSession,
+    resumeSession,
     stopSession,
   };
 };

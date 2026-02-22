@@ -41,3 +41,28 @@ create trigger prevent_profiles_email_update
 before update on public.profiles
 for each row execute function public.prevent_email_update();
 
+create table if not exists public.tasmee_attempts (
+  id uuid primary key,
+  session_id text unique not null,
+  clerk_user_id text not null,
+  page_number int not null,
+  surah_id int not null,
+  recognizer_mode text not null,
+  transport_mode text not null default 'http',
+  started_at timestamptz not null default now(),
+  ended_at timestamptz,
+  chunks_received int not null default 0,
+  chunks_with_speech int not null default 0,
+  deltas_emitted int not null default 0,
+  deltas_blocked int not null default 0,
+  anchor_word_index int,
+  anchor_verse_end_word_index int,
+  max_confirmed_word_index int,
+  confirmed_word_count int not null default 0,
+  avg_total_ms double precision,
+  p95_total_ms double precision
+);
+
+create index if not exists idx_tasmee_attempts_user_started
+  on public.tasmee_attempts (clerk_user_id, started_at desc);
+

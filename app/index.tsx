@@ -145,7 +145,7 @@ export default function Dashboard() {
               <FlatList
                 data={results}
                 keyExtractor={(item, index) => index.toString()}
-                contentContainerClassName="py-2"
+                contentContainerStyle={{ paddingVertical: 8 }}
                 keyboardShouldPersistTaps="handled"
                 renderItem={({ item }) => (
                   <Pressable
@@ -197,7 +197,7 @@ export default function Dashboard() {
             horizontal
             showsHorizontalScrollIndicator={false}
             inverted
-            contentContainerClassName="px-5 items-center"
+            contentContainerStyle={{ paddingHorizontal: 20, alignItems: "center" }}
             renderItem={({ item: s, index }) => {
               const isActive = index === 0;
               return (

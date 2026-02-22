@@ -39,10 +39,10 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import QuranPage from "../../components/QuranPage";
 import QuranPager from "../../components/QuranPager";
 import BookmarkModal from "../../components/BookmarkModal";
+import QuoteLongPressOverlay from "../../components/QuoteLongPressOverlay";
+import QuotePreviewModal from "../../components/QuotePreviewModal";
 import SurahCarousel from "../../components/SurahCarousel";
-import TasmeePage from "../../components/TasmeePage";
 import TasmeeOverlay from "../../components/TasmeeOverlay";
-import TasmeeDebugHud from "../../components/TasmeeDebugHud";
 import { LAST_READ_PAGE_KEY } from "../../constants/storage";
 import { useTasmeeSession } from "../../hooks/useTasmeeSession";
 import { ARABIC_SURAHS } from "../../constants/surahNames";
@@ -53,9 +53,8 @@ import {
   getSurahIdForPageNumber,
   type MushafPage,
 } from "../../utils/mushafData";
-import {
-  prefetchQuranPageSvgs,
-} from "../../utils/quranSvgRegistry";
+import type { QuoteVerseSelection } from "../../utils/quoteVerseMapping";
+import { prefetchQuranPageSvgs } from "../../utils/quranSvgRegistry";
 import { SearchResult } from "../../utils/searchUtils";
 import { toArabicNumber } from "../../utils/toArabicNumbers";
 
@@ -85,6 +84,16 @@ const FIRST_PAGES_SCALE = NORMAL_SCALE;
 const MINI_SCALE = 0.85;
 const MINI_TRIGGER_SCALE = 0.7;
 const MINI_ANIMATION_DURATION_MS = 160;
+const MINI_PAGE_TOP_GAP = 38;
+const MINI_UI_BG = "#E3F4F2";
+const MINI_UI_BORDER = "#BDDCD8";
+const MINI_UI_ACCENT = "#1F8E89";
+const MINI_UI_TEXT = "#1B4E52";
+const MINI_UI_PLACEHOLDER = "#6B8F8D";
+const MINI_MENU_BG = "#CFE7E4";
+const MINI_MENU_BORDER = "#A7CFCC";
+const MINI_PAGE_CARD_BG = "#F2FAF8";
+const MINI_PAGE_CARD_BORDER = "#CFE5E2";
 const MIN_PINCH_SCALE = 0.5;
 const MAX_PINCH_SCALE = 3;
 const DOUBLE_TAP_WINDOW_MS = 180;
@@ -157,11 +166,11 @@ export default function SurahScreen() {
   const [bookmarkIconXml, setBookmarkIconXml] = useState<string | null>(null);
   const [moonIconXml, setMoonIconXml] = useState<string | null>(null);
   const [isBookmarkModalOpen, setIsBookmarkModalOpen] = useState(false);
+  const [quoteSelection, setQuoteSelection] =
+    useState<QuoteVerseSelection | null>(null);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const windowDimensions = useWindowDimensions();
   const isLandscape = windowDimensions.width > windowDimensions.height;
-  const [tasmeeDebugVisible, setTasmeeDebugVisible] = useState(false);
-  const [tasmeeOverlayEnabled, setTasmeeOverlayEnabled] = useState(false);
   const { query, setQuery, results, isSearching } = useQuranSearch();
 
   const pinchScale = useSharedValue(1);
@@ -284,6 +293,13 @@ export default function SurahScreen() {
     pageNumber: currentPageNumber,
     surahId: id,
   });
+  const quoteFeatureEnabled = !isMini && !tasmee.isRunning;
+
+  useEffect(() => {
+    if (!quoteFeatureEnabled) {
+      setQuoteSelection(null);
+    }
+  }, [quoteFeatureEnabled]);
 
   useEffect(() => {
     if (isMini) {
@@ -425,15 +441,40 @@ export default function SurahScreen() {
       lastTapTimestamp.value = now;
     });
 
+  const handleQuoteDetected = useCallback((selection: QuoteVerseSelection) => {
+    setQuoteSelection(selection);
+  }, []);
+
+  const handleCloseQuotePreview = useCallback(() => {
+    setQuoteSelection(null);
+  }, []);
+
   const renderPage = useCallback(
-    ({ item }: { item: number }) => (
-      <QuranPage
-        pageNumber={item}
-        markerMaskProgress={markerMaskProgress}
-        pageWidth={pageSize.width}
-      />
-    ),
-    [markerMaskProgress, pageSize.width],
+    ({ item }: { item: number }) => {
+      return (
+        <View style={{ flex: 1 }}>
+          <QuranPage
+            pageNumber={item}
+            markerMaskProgress={markerMaskProgress}
+            pageWidth={pageSize.width}
+          />
+          <QuoteLongPressOverlay
+            pageNumber={item}
+            pageWidth={pageSize.width}
+            pageHeight={pageSize.height}
+            enabled={quoteFeatureEnabled}
+            onQuoteDetected={handleQuoteDetected}
+          />
+        </View>
+      );
+    },
+    [
+      handleQuoteDetected,
+      markerMaskProgress,
+      pageSize.height,
+      pageSize.width,
+      quoteFeatureEnabled,
+    ],
   );
 
   const getFirstPageIndexForSurah = useCallback((surahNumber: number) => {
@@ -492,14 +533,7 @@ export default function SurahScreen() {
         setIsMini(false);
       }
     },
-    [
-      handleSelectSurah,
-      isMini,
-      miniModeValue,
-      router,
-      setQuery,
-      tasmee,
-    ],
+    [handleSelectSurah, isMini, miniModeValue, router, setQuery, tasmee],
   );
 
   const carouselIndex = Math.max(0, Math.min(SURAH_ITEMS.length - 1, id - 1));
@@ -512,145 +546,12 @@ export default function SurahScreen() {
   const horizontalPadding = isLandscape
     ? LANDSCAPE_HORIZONTAL_PADDING
     : PAGE_HORIZONTAL_PADDING;
-  const topPadding = isLandscape ? LANDSCAPE_TOP_PADDING : PAGE_TOP_PADDING;
+  const topPadding =
+    (isLandscape ? LANDSCAPE_TOP_PADDING : PAGE_TOP_PADDING) +
+    (isMini && !isLandscape ? MINI_PAGE_TOP_GAP : 0);
   const bottomPadding = isLandscape
     ? LANDSCAPE_BOTTOM_PADDING
     : PAGE_BOTTOM_PADDING;
-
-  const tasmeeStatusLabel = useMemo(() => {
-    switch (tasmee.feedbackState) {
-      case "reciting":
-        return "Reciting detected";
-      case "paused":
-        return "Paused after 10s silence. Tap mic to resume.";
-      case "silent":
-        return "No voice detected";
-      case "processing":
-        return "Checking your recitation...";
-      case "listening":
-      default:
-        return "Listening for your recitation...";
-    }
-  }, [tasmee.feedbackState]);
-
-  const tasmeeProgressLabel = `Correct ${tasmee.correctWordCount}/${tasmee.totalWordCount}`;
-  const tasmeeErrorBanner = tasmee.status === "error" && tasmee.errorMessage ? (
-    <View
-      pointerEvents="none"
-      style={{
-        position: "absolute",
-        top: 14,
-        left: 0,
-        right: 0,
-        alignItems: "center",
-      }}
-    >
-      <View
-        style={{
-          backgroundColor: "rgba(255, 236, 236, 0.98)",
-          borderWidth: 1,
-          borderColor: "#D79D9D",
-          borderRadius: 14,
-          paddingHorizontal: 12,
-          paddingVertical: 8,
-          maxWidth: "88%",
-        }}
-      >
-        <Text
-          style={{
-            color: "#6F1D1D",
-            fontSize: 12,
-            fontWeight: "600",
-            textAlign: "center",
-          }}
-        >
-          {tasmee.errorMessage}
-        </Text>
-      </View>
-    </View>
-  ) : null;
-
-  const tasmeeHeuristicModeBanner =
-    tasmee.isRunning && tasmee.recognizerMode === "heuristic" ? (
-      <View
-        pointerEvents="none"
-        style={{
-          position: "absolute",
-          top: 78,
-          left: 0,
-          right: 0,
-          alignItems: "center",
-        }}
-      >
-        <View
-          style={{
-            backgroundColor: "rgba(255, 248, 225, 0.98)",
-            borderWidth: 1,
-            borderColor: "#D6B36A",
-            borderRadius: 14,
-            paddingHorizontal: 12,
-            paddingVertical: 8,
-            maxWidth: "92%",
-          }}
-        >
-          <Text
-            style={{
-              color: "#5A3B00",
-              fontSize: 12,
-              fontWeight: "600",
-              textAlign: "center",
-            }}
-          >
-            Tasmee backend is running in heuristic mode (no STT). It can advance on
-            any loud sound. Configure `TASMEE_RECOGNIZER_MODE` (google/remote/openai)
-            to actually verify recitation.
-          </Text>
-        </View>
-      </View>
-    ) : null;
-
-  const listeningBanner = tasmee.isRunning ? (
-    <View
-      pointerEvents="none"
-      style={{
-        position: "absolute",
-        top: 14,
-        left: 0,
-        right: 0,
-        alignItems: "center",
-      }}
-    >
-      <View
-        style={{
-          backgroundColor: "rgba(226, 242, 250, 0.98)",
-          borderWidth: 1,
-          borderColor: "#9BC4D6",
-          borderRadius: 999,
-          paddingHorizontal: 14,
-          paddingVertical: 7,
-        }}
-      >
-        <Text
-          style={{
-            color: "#143441",
-            fontSize: 12,
-            fontWeight: "600",
-          }}
-        >
-          {tasmeeStatusLabel}
-        </Text>
-        <Text
-          style={{
-            color: "#2A5A6C",
-            fontSize: 11,
-            marginTop: 2,
-          }}
-        >
-          {tasmeeProgressLabel}
-        </Text>
-      </View>
-    </View>
-  ) : null;
 
   const pageContent = (
     <Animated.View
@@ -665,40 +566,92 @@ export default function SurahScreen() {
       ]}
     >
       {pageSize.width > 0 && pageSize.height > 0 ? (
-        tasmee.isRunning ? (
-          <View style={{ flex: 1, position: "relative" }}>
-            <TasmeePage pageData={tasmee.pageData} wordStates={tasmee.wordStates} />
-            {tasmeeOverlayEnabled ? (
-              <TasmeeOverlay
-                pageData={tasmee.pageData}
-                isLocked={tasmee.isLocked}
-                wordStates={tasmee.wordStates}
-              />
-            ) : null}
-          </View>
-        ) : (
-          <QuranPager
-            data={PAGE_NUMBERS}
-            initialIndex={pageIndex}
-            onIndexChange={setPageIndex}
-            renderItem={renderPage}
-            scrollEnabled={!tasmee.isRunning}
-            pageWidth={pageSize.width}
-            simultaneousGestures={[pinch, doubleTap]}
-          />
-        )
-      ) : null}
-      {listeningBanner}
-      {tasmeeHeuristicModeBanner}
-      {tasmeeErrorBanner}
-      {__DEV__ ? (
-        <TasmeeDebugHud
-          visible={tasmeeDebugVisible}
-          onClose={() => setTasmeeDebugVisible(false)}
-          overlayEnabled={tasmeeOverlayEnabled}
-          onToggleOverlay={() => setTasmeeOverlayEnabled((value) => !value)}
-          debug={tasmee.debug}
+        <QuranPager
+          data={PAGE_NUMBERS}
+          initialIndex={pageIndex}
+          onIndexChange={setPageIndex}
+          renderItem={renderPage}
+          scrollEnabled={!tasmee.isRunning}
+          pageWidth={pageSize.width}
+          simultaneousGestures={[pinch, doubleTap]}
         />
+      ) : null}
+      <TasmeeOverlay
+        pageData={tasmee.pageData}
+        wordStates={tasmee.wordStates}
+        isLocked={tasmee.isLocked}
+        pageNumber={currentPageNumber}
+        pageWidth={pageSize.width}
+        pageHeight={pageSize.height}
+      />
+      {tasmee.isListeningForStart ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            top: 14,
+            left: 0,
+            right: 0,
+            alignItems: "center",
+          }}
+        >
+          <View
+            style={{
+              backgroundColor: "rgba(226, 242, 250, 0.98)",
+              borderWidth: 1,
+              borderColor: "#9BC4D6",
+              borderRadius: 999,
+              paddingHorizontal: 14,
+              paddingVertical: 7,
+            }}
+          >
+            <Text
+              style={{
+                color: "#143441",
+                fontSize: 12,
+                fontWeight: "600",
+              }}
+            >
+              Listening for your starting words...
+            </Text>
+          </View>
+        </View>
+      ) : null}
+      {tasmee.status === "error" && tasmee.errorMessage ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            top: 14,
+            left: 0,
+            right: 0,
+            alignItems: "center",
+            paddingHorizontal: 14,
+          }}
+        >
+          <View
+            style={{
+              backgroundColor: "rgba(245, 225, 225, 0.98)",
+              borderWidth: 1,
+              borderColor: "#C56C6C",
+              borderRadius: 10,
+              paddingHorizontal: 12,
+              paddingVertical: 8,
+              maxWidth: "96%",
+            }}
+          >
+            <Text
+              style={{
+                color: "#7F2929",
+                fontSize: 12,
+                fontWeight: "600",
+                textAlign: "center",
+              }}
+            >
+              {tasmee.errorMessage}
+            </Text>
+          </View>
+        </View>
       ) : null}
     </Animated.View>
   );
@@ -719,7 +672,13 @@ export default function SurahScreen() {
       >
         <View className="flex-1">
           <Pressable
-            style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+            }}
             onPress={() => setIsMiniMenuOpen(false)}
             accessibilityRole="button"
             accessibilityLabel="Close menu"
@@ -727,7 +686,10 @@ export default function SurahScreen() {
             <View className="flex-1 bg-black/40" />
           </Pressable>
 
-          <View className="flex-1 items-end pt-16 px-5" pointerEvents="box-none">
+          <View
+            className="flex-1 items-end pt-16 px-5"
+            pointerEvents="box-none"
+          >
             <View className="w-64 rounded-2xl bg-[#FFFDF5] border border-[#E8E1D1] overflow-hidden">
               <Pressable
                 onPress={() => {
@@ -784,7 +746,7 @@ export default function SurahScreen() {
 
       {isMini ? (
         <View
-          className="pt-10 pb-1"
+          className="pt-12 pb-1"
           pointerEvents="box-none"
           style={{
             position: "absolute",
@@ -797,18 +759,15 @@ export default function SurahScreen() {
         >
           <View className="px-5 mb-1">
             <View
-              className="flex-row-reverse rounded-full px-4 py-2 items-center gap-2"
-              style={{
-                backgroundColor: MUSHAF_SURFACE,
-                borderColor: MUSHAF_BORDER,
-                borderWidth: 1,
-              }}
+              className="flex-row-reverse rounded-full px-4 py-2 items-center gap-2 border"
+              style={{ backgroundColor: MINI_UI_BG, borderColor: MINI_UI_BORDER }}
             >
-              <Ionicons name="search" size={18} color={MUSHAF_MUTED} />
+              <Ionicons name="search" size={18} color={MINI_UI_ACCENT} />
               <TextInput
                 placeholder="بحث في السور..."
-                placeholderTextColor={MUSHAF_MUTED}
-                className="flex-1 text-right text-base text-[#1F1F1F] font-uthmanic"
+                placeholderTextColor={MINI_UI_PLACEHOLDER}
+                className="flex-1 text-right text-base font-uthmanic"
+                style={{ color: MINI_UI_TEXT }}
                 value={query}
                 onChangeText={setQuery}
               />
@@ -827,7 +786,7 @@ export default function SurahScreen() {
             >
               {isSearching ? (
                 <View className="py-6 items-center justify-center">
-                  <ActivityIndicator color={MUSHAF_ACCENT_DARK} />
+                  <ActivityIndicator color={MINI_UI_ACCENT} />
                 </View>
               ) : results.length === 0 ? (
                 <View className="py-6 items-center justify-center px-5">
@@ -869,7 +828,7 @@ export default function SurahScreen() {
                         ) : (
                           <View className="flex-1">
                             <View className="flex-row-reverse items-center gap-1 mb-0">
-                              <Text className="text-xl text-[#255A6D] font-bold font-uthmanic">
+                              <Text className="text-xl font-bold font-uthmanic" style={{ color: MINI_UI_ACCENT }}>
                                 سورة {item.surahName}
                               </Text>
                               <Text className="text-2xl text-[#999] font-uthmanic">
@@ -914,11 +873,10 @@ export default function SurahScreen() {
             }}
           >
             <View
-              className="mx-6 mb-3 rounded-t-3xl px-10 py-3"
+              className="mx-6 mb-3 rounded-t-3xl border px-10 py-3"
               style={{
-                backgroundColor: MUSHAF_SURFACE,
-                borderColor: MUSHAF_BORDER,
-                borderWidth: 1,
+                backgroundColor: MINI_MENU_BG,
+                borderColor: MINI_MENU_BORDER,
                 shadowColor: "#000",
                 shadowOpacity: 0.08,
                 shadowRadius: 12,
@@ -941,19 +899,13 @@ export default function SurahScreen() {
                 ) : null}
                 <Pressable
                   onPress={() =>
-                    !tasmee.isRunning
-                      ? void tasmee.startSession()
-                      : tasmee.isPaused
-                        ? void tasmee.resumeSession()
-                        : void tasmee.stopSession()
+                    tasmee.isRunning
+                      ? void tasmee.stopSession()
+                      : void tasmee.startSession()
                   }
                   accessibilityRole="button"
                   accessibilityLabel={
-                    !tasmee.isRunning
-                      ? "Start tasmee"
-                      : tasmee.isPaused
-                        ? "Resume tasmee"
-                        : "Stop tasmee"
+                    tasmee.isRunning ? "Stop tasmee" : "Start tasmee"
                   }
                   style={({ pressed }) => ({
                     width: 34,
@@ -961,11 +913,9 @@ export default function SurahScreen() {
                     borderRadius: 17,
                     alignItems: "center",
                     justifyContent: "center",
-                    backgroundColor: !tasmee.isRunning
-                      ? "transparent"
-                      : tasmee.isPaused
-                        ? "#D28C2E"
-                        : "#BB4A4A",
+                    backgroundColor: tasmee.isRunning
+                      ? "#BB4A4A"
+                      : "transparent",
                     opacity: pressed ? 0.8 : 1,
                   })}
                 >
@@ -974,30 +924,13 @@ export default function SurahScreen() {
                     style={{
                       width: 22,
                       height: 22,
-                      tintColor: tasmee.isRunning ? "#FFFFFF" : MUSHAF_ACCENT_DARK,
+                      tintColor: tasmee.isRunning
+                        ? "#FFFFFF"
+                        : MUSHAF_ACCENT_DARK,
                     }}
                     resizeMode="contain"
                   />
                 </Pressable>
-                {__DEV__ ? (
-                  <Pressable
-                    onPress={() => setTasmeeDebugVisible((value) => !value)}
-                    accessibilityRole="button"
-                    accessibilityLabel="Toggle tasmee debug"
-                    style={({ pressed }) => ({
-                      paddingHorizontal: 10,
-                      paddingVertical: 6,
-                      borderRadius: 10,
-                      borderWidth: 1,
-                      borderColor: MUSHAF_BORDER,
-                      backgroundColor: pressed ? "rgba(37,90,109,0.15)" : "transparent",
-                    })}
-                  >
-                    <Text style={{ color: MUSHAF_ACCENT_DARK, fontWeight: "700" }}>
-                      DBG
-                    </Text>
-                  </Pressable>
-                ) : null}
               </View>
             </View>
           </View>
@@ -1027,45 +960,14 @@ export default function SurahScreen() {
               }}
             >
               {pageSize.width > 0 && pageSize.height > 0 ? (
-                tasmee.isRunning ? (
-                  <View style={{ flex: 1 }}>
-                    <View style={{ flex: 1, position: "relative" }}>
-                      <TasmeePage
-                        pageData={tasmee.pageData}
-                        wordStates={tasmee.wordStates}
-                      />
-                      {tasmeeOverlayEnabled ? (
-                        <TasmeeOverlay
-                          pageData={tasmee.pageData}
-                          isLocked={tasmee.isLocked}
-                          wordStates={tasmee.wordStates}
-                        />
-                      ) : null}
-                    </View>
-                    {listeningBanner}
-                    {tasmeeErrorBanner}
-                    {__DEV__ ? (
-                      <TasmeeDebugHud
-                        visible={tasmeeDebugVisible}
-                        onClose={() => setTasmeeDebugVisible(false)}
-                        overlayEnabled={tasmeeOverlayEnabled}
-                        onToggleOverlay={() =>
-                          setTasmeeOverlayEnabled((value) => !value)
-                        }
-                        debug={tasmee.debug}
-                      />
-                    ) : null}
-                  </View>
-                ) : (
-                  <QuranPager
-                    data={PAGE_NUMBERS}
-                    initialIndex={pageIndex}
-                    onIndexChange={setPageIndex}
-                    renderItem={renderPage}
-                    scrollEnabled={!tasmee.isRunning}
-                    pageWidth={pageSize.width}
-                  />
-                )
+                <QuranPager
+                  data={PAGE_NUMBERS}
+                  initialIndex={pageIndex}
+                  onIndexChange={setPageIndex}
+                  renderItem={renderPage}
+                  scrollEnabled={!tasmee.isRunning}
+                  pageWidth={pageSize.width}
+                />
               ) : null}
             </View>
           </ScrollView>
@@ -1081,15 +983,15 @@ export default function SurahScreen() {
             <View
               style={[
                 isMini && {
-                  padding: 10,
-                  backgroundColor: MUSHAF_ACCENT,
-                  borderRadius: 20,
-                  borderWidth: 2,
-                  borderColor: MUSHAF_BORDER_LIGHT,
-                  shadowColor: "#4C7F95",
-                  shadowOpacity: 0.22,
-                  shadowRadius: 12,
-                  shadowOffset: { width: 0, height: 7 },
+                  padding: 8,
+                  backgroundColor: MINI_PAGE_CARD_BG,
+                  borderRadius: 18,
+                  borderWidth: 1,
+                  borderColor: MINI_PAGE_CARD_BORDER,
+                  shadowColor: "#000",
+                  shadowOpacity: 0.08,
+                  shadowRadius: 10,
+                  shadowOffset: { width: 0, height: 6 },
                   elevation: 4,
                 },
               ]}
@@ -1104,8 +1006,11 @@ export default function SurahScreen() {
         onClose={handleCloseBookmarkModal}
         currentPageNumber={page?.pageNumber}
       />
+      <QuotePreviewModal
+        visible={quoteSelection != null}
+        quote={quoteSelection}
+        onClose={handleCloseQuotePreview}
+      />
     </SafeAreaView>
   );
 }
-
-

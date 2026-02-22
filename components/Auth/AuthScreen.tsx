@@ -8,6 +8,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   Text,
   TextInput,
   View,
@@ -19,6 +20,8 @@ type AuthTab = "signIn" | "signUp";
 
 const PRIMARY = "#A7D4DA";
 const TEXT = "#1F1F1F";
+const PRIMARY_BUTTON_BG = "#7FC6CF";
+const PRIMARY_BUTTON_TEXT = "#10353C";
 
 const getClerkErrorMessage = (error: unknown) => {
   const fallback = "Something went wrong. Please try again.";
@@ -56,6 +59,18 @@ export default function AuthScreen({
     [width],
   );
   const isCompactHeight = height < 760;
+  const inputTextStyle = useMemo(
+    () => ({
+      fontSize: 16,
+      lineHeight: 22,
+      color: TEXT,
+      paddingVertical: Platform.OS === "ios" ? 2 : 0,
+      ...(Platform.OS === "android"
+        ? { includeFontPadding: false, textAlignVertical: "center" as const }
+        : {}),
+    }),
+    [],
+  );
 
   useWarmUpBrowser();
 
@@ -224,11 +239,20 @@ export default function AuthScreen({
         onPress={Keyboard.dismiss}
         accessible={false}
       >
-        <View
-          className="flex-1 items-center bg-[#FFFDF5]"
-          style={{ paddingHorizontal: 20, paddingBottom: 24 }}
+        <ScrollView
+          style={{ flex: 1, backgroundColor: "#FFFDF5" }}
+          contentContainerStyle={{
+            flexGrow: 1,
+            alignItems: "center",
+            paddingHorizontal: 20,
+            paddingBottom: isCompactHeight ? 72 : 92,
+          }}
+          keyboardShouldPersistTaps="always"
+          automaticallyAdjustKeyboardInsets={Platform.OS === "ios"}
+          showsVerticalScrollIndicator={false}
+          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
         >
-          <View className="w-full flex-1" style={{ maxWidth: contentWidth }}>
+          <View className="w-full" style={{ maxWidth: contentWidth }}>
             <View
               className="pt-4 pb-2"
               style={{ marginBottom: isCompactHeight ? 2 : 6 }}
@@ -349,7 +373,7 @@ export default function AuthScreen({
               </Pressable>
             </View>
 
-            <View className="flex-1" style={{ marginTop: isCompactHeight ? 14 : 18 }}>
+            <View style={{ marginTop: isCompactHeight ? 14 : 18 }}>
               {tab === "signIn" ? (
                 <>
                   <View>
@@ -369,7 +393,7 @@ export default function AuthScreen({
                         placeholderTextColor="#B0BAC5"
                         autoCapitalize="none"
                         keyboardType="email-address"
-                        className="text-base text-[#1F1F1F]"
+                        style={inputTextStyle}
                       />
                     </View>
                   </View>
@@ -390,7 +414,8 @@ export default function AuthScreen({
                         placeholder="Enter your password"
                         placeholderTextColor="#B0BAC5"
                         secureTextEntry={isPasswordHidden}
-                        className="flex-1 text-base text-[#1F1F1F]"
+                        className="flex-1"
+                        style={inputTextStyle}
                       />
                       <Pressable
                         onPress={() => setIsPasswordHidden((v) => !v)}
@@ -430,23 +455,27 @@ export default function AuthScreen({
                       disabled={!isSignInLoaded || isSubmitting}
                       className="rounded-full items-center justify-center"
                       style={({ pressed }) => ({
-                        backgroundColor: PRIMARY,
+                        backgroundColor: PRIMARY_BUTTON_BG,
                         paddingVertical: 16,
+                        minHeight: 56,
                         shadowColor: "#000",
                         shadowOpacity: 0.08,
                         shadowRadius: 14,
                         shadowOffset: { width: 0, height: 8 },
                         elevation: 4,
                         opacity:
-                          !isSignInLoaded || isSubmitting ? 0.6 : pressed ? 0.9 : 1,
+                          !isSignInLoaded || isSubmitting ? 0.72 : pressed ? 0.9 : 1,
                       })}
                       accessibilityRole="button"
                       accessibilityLabel="Sign in"
                     >
                       {isSubmitting ? (
-                        <ActivityIndicator color="#FFFFFF" />
+                        <ActivityIndicator color={PRIMARY_BUTTON_TEXT} />
                       ) : (
-                        <Text className="text-white text-xl font-semibold">
+                        <Text
+                          className="text-xl font-semibold"
+                          style={{ color: PRIMARY_BUTTON_TEXT }}
+                        >
                           Sign In
                         </Text>
                       )}
@@ -506,7 +535,7 @@ export default function AuthScreen({
                           onChangeText={setFirstName}
                           placeholder="First Name"
                           placeholderTextColor="#B0BAC5"
-                          className="text-base text-[#1F1F1F]"
+                          style={inputTextStyle}
                         />
                       </View>
                     </View>
@@ -526,7 +555,7 @@ export default function AuthScreen({
                           onChangeText={setLastName}
                           placeholder="Last Name"
                           placeholderTextColor="#B0BAC5"
-                          className="text-base text-[#1F1F1F]"
+                          style={inputTextStyle}
                         />
                       </View>
                     </View>
@@ -549,7 +578,7 @@ export default function AuthScreen({
                         placeholderTextColor="#B0BAC5"
                         autoCapitalize="none"
                         keyboardType="email-address"
-                        className="text-base text-[#1F1F1F]"
+                        style={inputTextStyle}
                       />
                     </View>
                   </View>
@@ -570,7 +599,8 @@ export default function AuthScreen({
                         placeholder="Enter your password"
                         placeholderTextColor="#B0BAC5"
                         secureTextEntry={isPasswordHidden}
-                        className="flex-1 text-base text-[#1F1F1F]"
+                        className="flex-1"
+                        style={inputTextStyle}
                       />
                       <Pressable
                         onPress={() => setIsPasswordHidden((v) => !v)}
@@ -595,8 +625,9 @@ export default function AuthScreen({
                       disabled={!isSignUpLoaded || isSubmitting || pendingEmailVerification}
                       className="rounded-full items-center justify-center"
                       style={({ pressed }) => ({
-                        backgroundColor: PRIMARY,
+                        backgroundColor: PRIMARY_BUTTON_BG,
                         paddingVertical: 16,
+                        minHeight: 56,
                         shadowColor: "#000",
                         shadowOpacity: 0.08,
                         shadowRadius: 14,
@@ -604,7 +635,7 @@ export default function AuthScreen({
                         elevation: 4,
                         opacity:
                           !isSignUpLoaded || isSubmitting || pendingEmailVerification
-                            ? 0.6
+                            ? 0.72
                             : pressed
                               ? 0.9
                               : 1,
@@ -613,9 +644,12 @@ export default function AuthScreen({
                       accessibilityLabel="Create account"
                     >
                       {isSubmitting && !pendingEmailVerification ? (
-                        <ActivityIndicator color="#FFFFFF" />
+                        <ActivityIndicator color={PRIMARY_BUTTON_TEXT} />
                       ) : (
-                        <Text className="text-white text-xl font-semibold">
+                        <Text
+                          className="text-xl font-semibold"
+                          style={{ color: PRIMARY_BUTTON_TEXT }}
+                        >
                           Create Account
                         </Text>
                       )}
@@ -649,7 +683,7 @@ export default function AuthScreen({
                               keyboardType={
                                 Platform.OS === "ios" ? "number-pad" : "numeric"
                               }
-                              className="text-base text-[#1F1F1F]"
+                              style={inputTextStyle}
                             />
                           </View>
                         </View>
@@ -659,8 +693,9 @@ export default function AuthScreen({
                           disabled={isSubmitting}
                           className="mt-4 rounded-full items-center justify-center"
                           style={({ pressed }) => ({
-                            backgroundColor: PRIMARY,
+                            backgroundColor: PRIMARY_BUTTON_BG,
                             paddingVertical: 16,
+                            minHeight: 56,
                             shadowColor: "#000",
                             shadowOpacity: 0.08,
                             shadowRadius: 14,
@@ -672,9 +707,12 @@ export default function AuthScreen({
                           accessibilityLabel="Verify email"
                         >
                           {isSubmitting ? (
-                            <ActivityIndicator color="#FFFFFF" />
+                            <ActivityIndicator color={PRIMARY_BUTTON_TEXT} />
                           ) : (
-                            <Text className="text-white text-xl font-semibold">
+                            <Text
+                              className="text-xl font-semibold"
+                              style={{ color: PRIMARY_BUTTON_TEXT }}
+                            >
                               Verify Email
                             </Text>
                           )}
@@ -767,7 +805,7 @@ export default function AuthScreen({
               )}
             </View>
           </View>
-        </View>
+        </ScrollView>
       </Pressable>
     </KeyboardAvoidingView>
   );

@@ -96,6 +96,30 @@ function SettingsRow({
   );
 }
 
+function Section({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <View style={{ marginTop: 40 }}>
+      <Text
+        className="text-xl font-bold text-[#1F1F1F]"
+        style={{
+          marginBottom: 16,
+          zIndex: 2,
+          backgroundColor: BG,
+        }}
+      >
+        {title}
+      </Text>
+      <View style={{ zIndex: 1, rowGap: 16 }}>{children}</View>
+    </View>
+  );
+}
+
 export default function ProfileScreen() {
   const router = useRouter();
   const { width } = useWindowDimensions();
@@ -339,10 +363,7 @@ export default function ProfileScreen() {
           </View>
 
           {/* Personal Information */}
-          <Text className="text-xl font-bold text-[#1F1F1F] mt-10">
-            Personal Information
-          </Text>
-          <View className="mt-4 gap-4">
+          <Section title="Personal Information">
             <InfoRow
               icon="person-outline"
               label="First Name"
@@ -361,13 +382,10 @@ export default function ProfileScreen() {
               value={displayEmail}
               onPress={emailCannotChange}
             />
-          </View>
+          </Section>
 
           {/* Account Settings */}
-          <Text className="text-xl font-bold text-[#1F1F1F] mt-10">
-            Account Settings
-          </Text>
-          <View className="mt-4 gap-4">
+          <Section title="Account Settings">
             <SettingsRow
               icon="notifications-outline"
               label="Notifications"
@@ -383,7 +401,7 @@ export default function ProfileScreen() {
               label="Privacy & Security"
               onPress={() => comingSoon("Privacy & Security")}
             />
-          </View>
+          </Section>
 
           {/* Logout */}
           <Pressable

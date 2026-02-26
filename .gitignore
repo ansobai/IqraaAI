@@ -22,6 +22,7 @@ expo-env.d.ts
 assets/**/*.png
 assets/**/*.ttf
 assets/**/*.txt
+!assets/images/icon.png
 
 
 # Metro

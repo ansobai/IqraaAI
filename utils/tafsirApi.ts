@@ -1,16 +1,16 @@
-type FetchJalalaynTafsirArgs = {
+type FetchMuyassarTafsirArgs = {
   surahId: number;
   verseNumber: string | number;
   signal?: AbortSignal;
 };
 
-type JalalaynApiResponse = {
+type MuyassarApiResponse = {
   data?: {
     text?: unknown;
   };
 };
 
-const JALALAYN_API_BASE = "https://api.alquran.cloud/v1/ayah";
+const TAFSIR_API_BASE = "https://api.alquran.cloud/v1/ayah";
 
 export const MAX_CACHED_TAFSIR_ENTRIES = 120;
 
@@ -118,31 +118,31 @@ const parseErrorMessageFromResponse = async (response: Response) => {
   return `Request failed (${response.status})`;
 };
 
-const requestJalalaynTafsir = async (
+const requestMuyassarTafsir = async (
   surahId: number,
   ayahNumber: number,
 ): Promise<string> => {
-  const endpoint = `${JALALAYN_API_BASE}/${surahId}:${ayahNumber}/ar.jalalayn`;
+  const endpoint = `${TAFSIR_API_BASE}/${surahId}:${ayahNumber}/ar.muyassar`;
   const response = await fetch(endpoint);
   if (!response.ok) {
     throw new Error(await parseErrorMessageFromResponse(response));
   }
 
-  const payload = (await response.json()) as JalalaynApiResponse;
+  const payload = (await response.json()) as MuyassarApiResponse;
   const text = payload?.data?.text;
 
   if (typeof text !== "string" || text.trim().length === 0) {
-    throw new Error("Invalid Jalalayn tafsir response");
+    throw new Error("Invalid Muyassar tafsir response");
   }
 
   return text;
 };
 
-export const fetchJalalaynTafsir = async ({
+export const fetchMuyassarTafsir = async ({
   surahId,
   verseNumber,
   signal,
-}: FetchJalalaynTafsirArgs): Promise<string> => {
+}: FetchMuyassarTafsirArgs): Promise<string> => {
   const safeSurahId = parsePositiveInteger(surahId, "surahId");
   const safeVerseNumber = parsePositiveInteger(verseNumber, "verseNumber");
   const cacheKey = makeCacheKey(safeSurahId, safeVerseNumber);
@@ -157,7 +157,7 @@ export const fetchJalalaynTafsir = async ({
     return withAbortSignal(inFlight, signal);
   }
 
-  const requestPromise = requestJalalaynTafsir(safeSurahId, safeVerseNumber)
+  const requestPromise = requestMuyassarTafsir(safeSurahId, safeVerseNumber)
     .then((text) => {
       setCachedTafsir(cacheKey, text);
       return text;
@@ -171,7 +171,7 @@ export const fetchJalalaynTafsir = async ({
   return withAbortSignal(requestPromise, signal);
 };
 
-export const clearJalalaynTafsirSessionCache = () => {
+export const clearMuyassarTafsirSessionCache = () => {
   TAFSIR_CACHE.clear();
   IN_FLIGHT_TAFSIR_REQUESTS.clear();
 };

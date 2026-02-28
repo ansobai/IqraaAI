@@ -13,6 +13,7 @@ import React, {
 } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Image,
   Keyboard,
@@ -44,6 +45,7 @@ import QuotePreviewModal from "../../components/QuotePreviewModal";
 import SurahCarousel from "../../components/SurahCarousel";
 import TasmeeOverlay from "../../components/TasmeeOverlay";
 import { LAST_READ_PAGE_KEY } from "../../constants/storage";
+import { useQuranRecitationPlayer } from "../../hooks/useQuranRecitationPlayer";
 import { useTasmeeSession } from "../../hooks/useTasmeeSession";
 import { ARABIC_SURAHS } from "../../constants/surahNames";
 import { useQuranSearch } from "../../hooks/useQuranSearch";
@@ -54,15 +56,23 @@ import {
   type MushafPage,
 } from "../../utils/mushafData";
 import type { QuoteVerseSelection } from "../../utils/quoteVerseMapping";
-import { prefetchQuranPageSvgs } from "../../utils/quranSvgRegistry";
+import {
+  loadQuranPageSvgXml,
+  prefetchQuranPageSvgs,
+} from "../../utils/quranSvgRegistry";
 import { SearchResult } from "../../utils/searchUtils";
 import { toArabicNumber } from "../../utils/toArabicNumbers";
 
 // Load static data once
 const PAGES = MUSHAF_PAGES as MushafPage[];
 const SURAH_MAP = MUSHAF_SURAH_START_PAGE as Record<string, number>;
+const PAGE_INDEX_BY_NUMBER = new Map<number, number>(
+  PAGES.map((page, index) => [page.pageNumber, index]),
+);
+const getPageIndexByNumber = (pageNumber: number) =>
+  PAGE_INDEX_BY_NUMBER.get(pageNumber) ?? -1;
 const FALLBACK_PAGE_INDEX = Math.max(
-  PAGES.findIndex((p) => p.pageNumber === 1),
+  getPageIndexByNumber(1),
   0,
 );
 const FALLBACK_PAGE_NUMBER = PAGES[FALLBACK_PAGE_INDEX]?.pageNumber ?? 1;
@@ -145,7 +155,7 @@ export default function SurahScreen() {
 
   // Index of that page in PAGES[]
   const initialIndex = useMemo(() => {
-    const idx = PAGES.findIndex((p) => p.pageNumber === firstPageNumber);
+    const idx = getPageIndexByNumber(firstPageNumber);
     return idx === -1 ? 0 : idx;
   }, [firstPageNumber]);
 
@@ -184,28 +194,25 @@ export default function SurahScreen() {
 
     const restoreLastPage = async () => {
       try {
-        const saved = await AsyncStorage.getItem(LAST_READ_PAGE_KEY);
-        if (!isActive) return;
-
         if (pageParam) {
           const targetPage = Number(pageParam);
-          const targetIndex = PAGES.findIndex(
-            (p) => p.pageNumber === targetPage,
-          );
+          const targetIndex = getPageIndexByNumber(targetPage);
           if (targetIndex !== -1) {
             setPageIndex(targetIndex);
             return;
           }
         }
 
-        const savedNumber = saved ? Number(saved) : NaN;
         if (forceFirstPage) {
           setPageIndex(initialIndex);
           return;
         }
 
+        const saved = await AsyncStorage.getItem(LAST_READ_PAGE_KEY);
+        if (!isActive) return;
+        const savedNumber = saved ? Number(saved) : NaN;
         const savedIndex = Number.isFinite(savedNumber)
-          ? PAGES.findIndex((p) => p.pageNumber === savedNumber)
+          ? getPageIndexByNumber(savedNumber)
           : -1;
         const savedSurahId = Number.isFinite(savedNumber)
           ? getSurahIdForPageNumber(savedNumber)
@@ -239,7 +246,8 @@ export default function SurahScreen() {
     if (!pageNumber) return;
 
     const nearbyPages = getNearbyPages(pageNumber, PREFETCH_WINDOW);
-    prefetchQuranPageSvgs(nearbyPages);
+    const cancelPrefetch = prefetchQuranPageSvgs(nearbyPages);
+    return cancelPrefetch;
   }, [pageIndex]);
 
   useEffect(() => {
@@ -267,7 +275,7 @@ export default function SurahScreen() {
 
     if (pageParam) {
       const targetPage = Number(pageParam);
-      const targetIndex = PAGES.findIndex((p) => p.pageNumber === targetPage);
+      const targetIndex = getPageIndexByNumber(targetPage);
       if (targetIndex !== -1) {
         setPageIndex(targetIndex);
         return;
@@ -283,6 +291,21 @@ export default function SurahScreen() {
     pageNumber: currentPageNumber,
     surahId: id,
   });
+  const {
+    playVerse,
+    playPageFromStart,
+    stop: stopRecitation,
+    state: recitationState,
+  } = useQuranRecitationPlayer({
+    onError: (message) => {
+      Alert.alert("Recitation", message);
+    },
+  });
+  const previousPageNumberRef = useRef(currentPageNumber);
+  const isVerseAudioLoading =
+    recitationState.mode === "verse" && recitationState.status === "loading";
+  const isMiniPageAudioLoading =
+    recitationState.mode === "page" && recitationState.status === "loading";
   const quoteFeatureEnabled = !isMini && !tasmee.isRunning;
   const quoteVerseSequence = useMemo<QuoteVerseSelection[]>(
     () =>
@@ -330,6 +353,18 @@ export default function SurahScreen() {
       setQuoteSelection(null);
     }
   }, [quoteFeatureEnabled]);
+
+  useEffect(() => {
+    const previousPageNumber = previousPageNumberRef.current;
+    previousPageNumberRef.current = currentPageNumber;
+
+    if (
+      previousPageNumber !== currentPageNumber &&
+      recitationState.mode === "page"
+    ) {
+      void stopRecitation();
+    }
+  }, [currentPageNumber, recitationState.mode, stopRecitation]);
 
   useEffect(() => {
     if (isMini) {
@@ -486,9 +521,19 @@ export default function SurahScreen() {
     if (!canGoToNextQuote) return;
     setQuoteSelection(quoteVerseSequence[selectedQuoteIndex + 1] ?? null);
   }, [canGoToNextQuote, quoteVerseSequence, selectedQuoteIndex]);
+  const handlePlayQuoteVerse = useCallback(
+    (selection: QuoteVerseSelection) => {
+      void playVerse({
+        surahId: selection.surahId,
+        verseNumber: selection.verseNumber,
+      });
+    },
+    [playVerse],
+  );
 
   const renderPage = useCallback(
-    ({ item }: { item: number }) => {
+    ({ item, index }: { item: number; index: number }) => {
+      const isActivePage = index === pageIndex;
       return (
         <View style={{ flex: 1 }}>
           <QuranPage
@@ -496,19 +541,22 @@ export default function SurahScreen() {
             markerMaskProgress={markerMaskProgress}
             pageWidth={pageSize.width}
           />
-          <QuoteLongPressOverlay
-            pageNumber={item}
-            pageWidth={pageSize.width}
-            pageHeight={pageSize.height}
-            enabled={quoteFeatureEnabled}
-            onQuoteDetected={handleQuoteDetected}
-          />
+          {isActivePage && quoteFeatureEnabled ? (
+            <QuoteLongPressOverlay
+              pageNumber={item}
+              pageWidth={pageSize.width}
+              pageHeight={pageSize.height}
+              enabled={quoteFeatureEnabled}
+              onQuoteDetected={handleQuoteDetected}
+            />
+          ) : null}
         </View>
       );
     },
     [
       handleQuoteDetected,
       markerMaskProgress,
+      pageIndex,
       pageSize.height,
       pageSize.width,
       quoteFeatureEnabled,
@@ -517,8 +565,14 @@ export default function SurahScreen() {
 
   const getFirstPageIndexForSurah = useCallback((surahNumber: number) => {
     const firstPage = SURAH_MAP[String(surahNumber)] ?? FALLBACK_PAGE_NUMBER;
-    const idx = PAGES.findIndex((p) => p.pageNumber === firstPage);
+    const idx = getPageIndexByNumber(firstPage);
     return idx === -1 ? FALLBACK_PAGE_INDEX : idx;
+  }, []);
+
+  const prefetchTargetPages = useCallback((pageNumber: number) => {
+    if (!pageNumber) return;
+    void loadQuranPageSvgXml(pageNumber);
+    void prefetchQuranPageSvgs(getNearbyPages(pageNumber, PREFETCH_WINDOW));
   }, []);
 
   const handleSelectSurah = useCallback(
@@ -526,16 +580,34 @@ export default function SurahScreen() {
       if (tasmee.isRunning) {
         void tasmee.stopSession();
       }
-      setPageIndex(getFirstPageIndexForSurah(surahNumber));
-      router.replace({
-        pathname: "/[surahId]",
-        params: {
-          surahId: String(surahNumber),
-          startAt: "first",
-        },
-      });
+      const targetIndex = getFirstPageIndexForSurah(surahNumber);
+      const targetPageNumber =
+        PAGES[targetIndex]?.pageNumber ?? FALLBACK_PAGE_NUMBER;
+      prefetchTargetPages(targetPageNumber);
+      setPageIndex(targetIndex);
+
+      const shouldReplaceRoute =
+        surahNumber !== id || Boolean(pageParam) || !forceFirstPage;
+
+      if (shouldReplaceRoute) {
+        router.replace({
+          pathname: "/[surahId]",
+          params: {
+            surahId: String(surahNumber),
+            startAt: "first",
+          },
+        });
+      }
     },
-    [getFirstPageIndexForSurah, router, tasmee],
+    [
+      forceFirstPage,
+      getFirstPageIndexForSurah,
+      id,
+      pageParam,
+      prefetchTargetPages,
+      router,
+      tasmee,
+    ],
   );
 
   const handleSearchResultPress = useCallback(
@@ -549,9 +621,8 @@ export default function SurahScreen() {
       if (result.type === "surah") {
         handleSelectSurah(result.id);
       } else {
-        const targetIndex = PAGES.findIndex(
-          (p) => p.pageNumber === result.pageNumber,
-        );
+        const targetIndex = getPageIndexByNumber(result.pageNumber);
+        prefetchTargetPages(result.pageNumber);
         if (targetIndex !== -1) {
           setPageIndex(targetIndex);
         }
@@ -571,7 +642,15 @@ export default function SurahScreen() {
         setIsMini(false);
       }
     },
-    [handleSelectSurah, isMini, miniModeValue, router, setQuery, tasmee],
+    [
+      handleSelectSurah,
+      isMini,
+      miniModeValue,
+      prefetchTargetPages,
+      router,
+      setQuery,
+      tasmee,
+    ],
   );
 
   const carouselIndex = Math.max(0, Math.min(SURAH_ITEMS.length - 1, id - 1));
@@ -938,11 +1017,34 @@ export default function SurahScreen() {
                   <SvgXml xml={moonIconXml} width={28} height={28} />
                 ) : null}
                 <Pressable
-                  onPress={() =>
-                    tasmee.isRunning
-                      ? void tasmee.stopSession()
-                      : void tasmee.startSession()
-                  }
+                  onPress={() => void playPageFromStart(page)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Play current page recitation"
+                  style={({ pressed }) => ({
+                    width: 34,
+                    height: 34,
+                    borderRadius: 17,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    backgroundColor: "transparent",
+                    opacity: pressed ? 0.8 : 1,
+                  })}
+                >
+                  <Ionicons
+                    name={isMiniPageAudioLoading ? "download" : "play"}
+                    size={22}
+                    color={MUSHAF_ACCENT_DARK}
+                  />
+                </Pressable>
+                <Pressable
+                  onPress={() => {
+                    if (tasmee.isRunning) {
+                      void tasmee.stopSession();
+                      return;
+                    }
+                    void stopRecitation();
+                    void tasmee.startSession();
+                  }}
                   accessibilityRole="button"
                   accessibilityLabel={
                     tasmee.isRunning ? "Stop tasmee" : "Start tasmee"
@@ -1050,6 +1152,8 @@ export default function SurahScreen() {
         visible={quoteSelection != null}
         quote={quoteSelection}
         onClose={handleCloseQuotePreview}
+        onPlayVerse={handlePlayQuoteVerse}
+        isVerseAudioLoading={isVerseAudioLoading}
         onPreviousVerse={handlePreviousQuote}
         onNextVerse={handleNextQuote}
         canGoPreviousVerse={canGoToPreviousQuote}

@@ -80,6 +80,12 @@ function QuoteLongPressOverlay({
     let isActive = true;
     setPageLines(null);
 
+    if (!enabled) {
+      return () => {
+        isActive = false;
+      };
+    }
+
     loadMushafPage(pageNumber).then((loadedPage) => {
       if (!isActive) return;
       setPageLines(loadedPage);
@@ -88,11 +94,17 @@ function QuoteLongPressOverlay({
     return () => {
       isActive = false;
     };
-  }, [pageNumber]);
+  }, [enabled, pageNumber]);
 
   useEffect(() => {
     let isActive = true;
     setTextBox(getFallbackQuranTextBox(pageNumber));
+
+    if (!enabled) {
+      return () => {
+        isActive = false;
+      };
+    }
 
     resolveQuranTextBox(pageNumber).then((resolvedBox) => {
       if (!isActive) return;
@@ -102,7 +114,7 @@ function QuoteLongPressOverlay({
     return () => {
       isActive = false;
     };
-  }, [pageNumber]);
+  }, [enabled, pageNumber]);
 
   const mushafPage = useMemo(
     () => PAGE_BY_NUMBER.get(pageNumber) ?? null,

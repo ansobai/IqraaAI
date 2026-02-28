@@ -74,21 +74,32 @@ export const MUSHAF_SURAH_START_PAGE: Record<string, number> = (() => {
   return map;
 })();
 
+const SURAH_START_ENTRIES = Object.entries(MUSHAF_SURAH_START_PAGE)
+  .map(([id, page]) => ({ id: Number(id), page }))
+  .filter(
+    (entry): entry is { id: number; page: number } =>
+      Number.isFinite(entry.id) && Number.isFinite(entry.page),
+  )
+  .sort((a, b) => a.page - b.page);
+
 export const getSurahIdForPageNumber = (pageNumber: number) => {
   if (!Number.isFinite(pageNumber) || pageNumber <= 0) return 1;
 
-  const entries = Object.entries(MUSHAF_SURAH_START_PAGE)
-    .map(([id, page]) => ({ id: Number(id), page }))
-    .filter((entry) => Number.isFinite(entry.page))
-    .sort((a, b) => a.page - b.page);
-
+  let left = 0;
+  let right = SURAH_START_ENTRIES.length - 1;
   let match = 1;
-  for (const entry of entries) {
+
+  while (left <= right) {
+    const mid = Math.floor((left + right) / 2);
+    const entry = SURAH_START_ENTRIES[mid];
+
     if (entry.page <= pageNumber) {
       match = entry.id;
-    } else {
-      break;
+      left = mid + 1;
+      continue;
     }
+
+    right = mid - 1;
   }
 
   return match;

@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  clearJalalaynTafsirSessionCache,
-  fetchJalalaynTafsir,
+  clearMuyassarTafsirSessionCache,
+  fetchMuyassarTafsir,
   MAX_CACHED_TAFSIR_ENTRIES,
 } from "./tafsirApi";
 
@@ -16,7 +16,7 @@ const toUrlString = (input: RequestInfo | URL) => {
 };
 
 const extractReferenceFromUrl = (url: string) => {
-  const match = url.match(/\/ayah\/(\d+:\d+)\/ar\.jalalayn$/);
+  const match = url.match(/\/ayah\/(\d+:\d+)\/ar\.muyassar$/);
   assert.ok(match, `Unexpected tafsir URL: ${url}`);
   return match[1];
 };
@@ -38,7 +38,7 @@ const createSuccessResponse = (text: string) =>
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
-  clearJalalaynTafsirSessionCache();
+  clearMuyassarTafsirSessionCache();
 });
 
 test("returns tafsir text and reuses session cache for same verse", async () => {
@@ -49,8 +49,8 @@ test("returns tafsir text and reuses session cache for same verse", async () => 
     return createSuccessResponse("cached-tafsir");
   }) as typeof fetch;
 
-  const first = await fetchJalalaynTafsir({ surahId: 2, verseNumber: 255 });
-  const second = await fetchJalalaynTafsir({ surahId: 2, verseNumber: "255" });
+  const first = await fetchMuyassarTafsir({ surahId: 2, verseNumber: 255 });
+  const second = await fetchMuyassarTafsir({ surahId: 2, verseNumber: "255" });
 
   assert.equal(first, "cached-tafsir");
   assert.equal(second, "cached-tafsir");
@@ -70,8 +70,8 @@ test("dedupes in-flight requests for the same verse", async () => {
     });
   }) as typeof fetch;
 
-  const promiseA = fetchJalalaynTafsir({ surahId: 1, verseNumber: 1 });
-  const promiseB = fetchJalalaynTafsir({ surahId: 1, verseNumber: 1 });
+  const promiseA = fetchMuyassarTafsir({ surahId: 1, verseNumber: 1 });
+  const promiseB = fetchMuyassarTafsir({ surahId: 1, verseNumber: 1 });
 
   assert.equal(fetchCalls, 1);
 
@@ -90,12 +90,12 @@ test("validates surah and ayah identifiers as positive integers", async () => {
   }) as typeof fetch;
 
   await assert.rejects(
-    () => fetchJalalaynTafsir({ surahId: 0, verseNumber: 1 }),
+    () => fetchMuyassarTafsir({ surahId: 0, verseNumber: 1 }),
     /surahId must be a positive integer/,
   );
 
   await assert.rejects(
-    () => fetchJalalaynTafsir({ surahId: 1, verseNumber: "abc" }),
+    () => fetchMuyassarTafsir({ surahId: 1, verseNumber: "abc" }),
     /verseNumber must be a positive integer/,
   );
 
@@ -110,7 +110,7 @@ test("throws when API response is non-OK", async () => {
     })) as typeof fetch;
 
   await assert.rejects(
-    () => fetchJalalaynTafsir({ surahId: 2, verseNumber: 999 }),
+    () => fetchMuyassarTafsir({ surahId: 2, verseNumber: 999 }),
     /not-found/,
   );
 });
@@ -131,11 +131,11 @@ test("does not cache failures and succeeds on next successful retry", async () =
   }) as typeof fetch;
 
   await assert.rejects(
-    () => fetchJalalaynTafsir({ surahId: 36, verseNumber: 58 }),
+    () => fetchMuyassarTafsir({ surahId: 36, verseNumber: 58 }),
     /temporary-failure/,
   );
 
-  const retried = await fetchJalalaynTafsir({ surahId: 36, verseNumber: 58 });
+  const retried = await fetchMuyassarTafsir({ surahId: 36, verseNumber: 58 });
 
   assert.equal(retried, "retried-successfully");
   assert.equal(fetchCalls, 2);
@@ -157,14 +157,14 @@ test("evicts least recently used entry when cache size exceeds limit", async () 
   }) as typeof fetch;
 
   for (let ayah = 1; ayah <= MAX_CACHED_TAFSIR_ENTRIES + 1; ayah += 1) {
-    await fetchJalalaynTafsir({ surahId: 2, verseNumber: ayah });
+    await fetchMuyassarTafsir({ surahId: 2, verseNumber: ayah });
   }
 
   assert.equal(callCountByReference.get("2:1"), 1);
   assert.equal(callCountByReference.get("2:2"), 1);
 
-  await fetchJalalaynTafsir({ surahId: 2, verseNumber: 2 });
-  await fetchJalalaynTafsir({ surahId: 2, verseNumber: 1 });
+  await fetchMuyassarTafsir({ surahId: 2, verseNumber: 2 });
+  await fetchMuyassarTafsir({ surahId: 2, verseNumber: 1 });
 
   assert.equal(callCountByReference.get("2:2"), 1);
   assert.equal(callCountByReference.get("2:1"), 2);

@@ -3,27 +3,31 @@ import React, { useEffect, useState } from "react";
 import {
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableWithoutFeedback,
+  useWindowDimensions,
   View,
 } from "react-native";
 
 import type { QuoteVerseSelection } from "../utils/quoteVerseMapping";
-import { fetchJalalaynTafsir } from "../utils/tafsirApi";
+import { fetchMuyassarTafsir } from "../utils/tafsirApi";
 import { toArabicNumber } from "../utils/toArabicNumbers";
 
 type QuotePreviewModalProps = {
   visible: boolean;
   quote: QuoteVerseSelection | null;
   onClose: () => void;
+  onPlayVerse: (quote: QuoteVerseSelection) => void;
+  isVerseAudioLoading: boolean;
   onPreviousVerse?: () => void;
   onNextVerse?: () => void;
   canGoPreviousVerse?: boolean;
   canGoNextVerse?: boolean;
 };
 
-const TAFSIR_SOURCE = "\u2013 \u062a\u0641\u0633\u064a\u0631 \u0627\u0644\u062c\u0644\u0627\u0644\u064a\u0646";
+const TAFSIR_SOURCE = "\u2013 \u0627\u0644\u062a\u0641\u0633\u064a\u0631 \u0627\u0644\u0645\u064a\u0633\u0631";
 const TAFSIR_LOADING_TEXT =
   "\u062c\u0627\u0631\u064a \u062a\u062d\u0645\u064a\u0644 \u0627\u0644\u062a\u0641\u0633\u064a\u0631...";
 const TAFSIR_ERROR_TEXT =
@@ -37,11 +41,14 @@ export default function QuotePreviewModal({
   visible,
   quote,
   onClose,
+  onPlayVerse,
+  isVerseAudioLoading,
   onPreviousVerse,
   onNextVerse,
   canGoPreviousVerse = false,
   canGoNextVerse = false,
 }: QuotePreviewModalProps) {
+  const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const [activeMode, setActiveMode] = useState<"tafsir" | "preview">("tafsir");
   const [tafsirText, setTafsirText] = useState<string | null>(null);
   const [isTafsirLoading, setIsTafsirLoading] = useState(false);
@@ -69,7 +76,7 @@ export default function QuotePreviewModal({
     setTafsirError(null);
     setTafsirText(null);
 
-    fetchJalalaynTafsir({
+    fetchMuyassarTafsir({
       surahId: selectedSurahId,
       verseNumber: selectedVerseNumber,
       signal: abortController.signal,
@@ -106,7 +113,21 @@ export default function QuotePreviewModal({
   const verseNumberLabel = Number.isFinite(numericVerse)
     ? toArabicNumber(numericVerse)
     : quote.verseNumber;
-  const verseWithMarker = `${stripTrailingAyahMarker(quote.verseText)} \u06DD${verseNumberLabel}`;
+  const cleanVerseText = stripTrailingAyahMarker(quote.verseText);
+  const verseWithMarker = `${cleanVerseText} \u06DD${verseNumberLabel}`;
+  const verseCharacterCount = cleanVerseText.length;
+  const isCompactHeight = windowHeight < 760;
+  const baseVerseFontSize = isCompactHeight ? 42 : 52;
+  const scaledVerseFontSize =
+    verseCharacterCount > 140
+      ? baseVerseFontSize - 10
+      : verseCharacterCount > 95
+        ? baseVerseFontSize - 6
+        : baseVerseFontSize;
+  const verseFontSize = Math.max(30, scaledVerseFontSize);
+  const verseLineHeight = Math.round(verseFontSize * 1.45);
+  const cardWidth = Math.min(windowWidth - 44, 620);
+  const cardMaxHeight = Math.min(windowHeight * 0.9, 900);
   const isPreviewMode = activeMode === "preview";
   const showTafsir = activeMode === "tafsir" || isPreviewMode;
   const showBottomActions = !isPreviewMode;
@@ -116,7 +137,7 @@ export default function QuotePreviewModal({
     <Modal visible={isVisible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose}>
         <TouchableWithoutFeedback>
-          <View style={styles.card}>
+          <View style={[styles.card, { width: cardWidth, maxHeight: cardMaxHeight }]}>
             <Pressable style={styles.closeButton} onPress={onClose} hitSlop={10}>
               <Ionicons name="close" size={30} color="#8E98A8" />
             </Pressable>
@@ -135,40 +156,59 @@ export default function QuotePreviewModal({
               </Pressable>
             ) : null}
 
-            <Text className="font-uthmanic" style={styles.headerText}>
-              {headerLabel}
-            </Text>
-
-            <View style={styles.contentWrap}>
-              <Text className="font-uthmanic" style={styles.verseText}>
-                {verseWithMarker}
-              </Text>
-            </View>
-
-            {showTafsir ? (
-              <View style={styles.tafsirSection}>
-                {isTafsirLoading ? (
-                  <Text className="font-uthmanic" style={styles.tafsirText}>
-                    {TAFSIR_LOADING_TEXT}
+            <ScrollView
+              style={styles.contentScroll}
+              contentContainerStyle={styles.contentScrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.bannerWrap}>
+                <View style={styles.surahBanner}>
+                  <Text className="font-uthmanic" style={styles.surahBannerText}>
+                    {headerLabel}
                   </Text>
-                ) : null}
-                {!isTafsirLoading && tafsirError ? (
-                  <Text className="font-uthmanic" style={styles.tafsirText}>
-                    {tafsirError}
-                  </Text>
-                ) : null}
-                {!isTafsirLoading && !tafsirError && tafsirText ? (
-                  <Text className="font-uthmanic" style={styles.tafsirText}>
-                    {tafsirText}
-                  </Text>
-                ) : null}
-                {!isPreviewMode && !isTafsirLoading && !tafsirError && tafsirText ? (
-                  <Text className="font-uthmanic" style={styles.sourceText}>
-                    {TAFSIR_SOURCE}
-                  </Text>
-                ) : null}
+                </View>
               </View>
-            ) : null}
+
+              <View style={styles.contentWrap}>
+                <Text
+                  className="font-uthmanic"
+                  style={[
+                    styles.verseText,
+                    {
+                      fontSize: verseFontSize,
+                      lineHeight: verseLineHeight,
+                    },
+                  ]}
+                >
+                  {verseWithMarker}
+                </Text>
+              </View>
+
+              {showTafsir ? (
+                <View style={styles.tafsirSection}>
+                  {isTafsirLoading ? (
+                    <Text className="font-uthmanic" style={styles.tafsirText}>
+                      {TAFSIR_LOADING_TEXT}
+                    </Text>
+                  ) : null}
+                  {!isTafsirLoading && tafsirError ? (
+                    <Text className="font-uthmanic" style={styles.tafsirText}>
+                      {tafsirError}
+                    </Text>
+                  ) : null}
+                  {!isTafsirLoading && !tafsirError && tafsirText ? (
+                    <Text className="font-uthmanic" style={styles.tafsirText}>
+                      {tafsirText}
+                    </Text>
+                  ) : null}
+                  {!isPreviewMode && !isTafsirLoading && !tafsirError && tafsirText ? (
+                    <Text className="font-uthmanic" style={styles.sourceText}>
+                      {TAFSIR_SOURCE}
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
+            </ScrollView>
 
             {showBottomActions ? (
               <>
@@ -210,8 +250,8 @@ export default function QuotePreviewModal({
                   />
                   <ActionButton
                     label="\u0627\u0633\u062a\u0645\u0627\u0639"
-                    icon="play"
-                    onPress={() => {}}
+                    icon={isVerseAudioLoading ? "download" : "play"}
+                    onPress={() => onPlayVerse(quote)}
                   />
                   {showVerseNavigation ? (
                     <Pressable
@@ -283,8 +323,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
   },
   card: {
-    width: "100%",
-    maxWidth: 620,
     borderRadius: 40,
     backgroundColor: "#FFFFFF",
     shadowColor: "#000",
@@ -293,29 +331,20 @@ const styles = StyleSheet.create({
     shadowRadius: 24,
     elevation: 12,
     overflow: "hidden",
-    paddingTop: 26,
-    paddingHorizontal: 22,
-    paddingBottom: 26,
-    minHeight: 560,
-  },
-  headerText: {
-    alignSelf: "center",
-    marginTop: 18,
-    fontSize: 24,
-    color: "#5F6775",
-    textAlign: "center",
-    writingDirection: "rtl",
+    paddingTop: 18,
+    paddingHorizontal: 20,
+    paddingBottom: 20,
   },
   closeButton: {
     position: "absolute",
-    left: 24,
-    top: 26,
+    left: 18,
+    top: 16,
     zIndex: 2,
   },
   previewDownloadButton: {
     position: "absolute",
-    right: 24,
-    top: 26,
+    right: 18,
+    top: 16,
     zIndex: 2,
   },
   previewDownloadIconWrap: {
@@ -324,36 +353,67 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  contentWrap: {
+  contentScroll: {
+    flexShrink: 1,
+    marginTop: 40,
+  },
+  contentScrollContent: {
+    paddingBottom: 12,
+  },
+  bannerWrap: {
+    alignItems: "center",
+  },
+  surahBanner: {
+    width: "100%",
+    maxWidth: 460,
+    minHeight: 52,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: "#CFD7E2",
+    backgroundColor: "#F6F8FB",
+    alignItems: "center",
+    justifyContent: "center",
     paddingHorizontal: 12,
-    paddingTop: 18,
-    paddingBottom: 14,
+  },
+  surahBannerText: {
+    color: "#384053",
+    fontSize: 24,
+    lineHeight: 34,
+    textAlign: "center",
+    writingDirection: "rtl",
+  },
+  contentWrap: {
+    paddingHorizontal: 8,
+    paddingTop: 14,
+    paddingBottom: 10,
   },
   verseText: {
-    fontSize: 60,
-    lineHeight: 100,
     color: "#0A1328",
     textAlign: "center",
     writingDirection: "rtl",
   },
   tafsirSection: {
+    marginTop: 6,
+    marginHorizontal: 2,
+    borderRadius: 20,
+    backgroundColor: "#EEF4FB",
     paddingHorizontal: 14,
-    paddingTop: 6,
-    paddingBottom: 8,
+    paddingTop: 12,
+    paddingBottom: 12,
   },
   tafsirText: {
-    fontSize: 18,
-    lineHeight: 39,
-    color: "#768093",
-    textAlign: "center",
+    fontSize: 21,
+    lineHeight: 38,
+    color: "#48536A",
+    textAlign: "right",
     writingDirection: "rtl",
   },
   sourceText: {
-    marginTop: 4,
-    fontSize: 18,
-    lineHeight: 30,
-    color: "#AAB2C0",
-    textAlign: "center",
+    marginTop: 6,
+    fontSize: 17,
+    lineHeight: 28,
+    color: "#7D8AA0",
+    textAlign: "right",
     writingDirection: "rtl",
   },
   previewHint: {

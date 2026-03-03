@@ -1,7 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
-import React, { useEffect, useState } from "react";
+import React from "react";
 import {
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,10 +11,10 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import { Circle, Rect, Svg } from "react-native-svg";
 
-import type { QuoteVerseSelection } from "../utils/quoteVerseMapping";
-import { fetchMuyassarTafsir } from "../utils/tafsirApi";
 import { toArabicNumber } from "../utils/toArabicNumbers";
+import { type QuoteVerseSelection } from "../utils/quoteVerseMapping";
 
 type QuotePreviewModalProps = {
   visible: boolean;
@@ -27,15 +28,26 @@ type QuotePreviewModalProps = {
   canGoNextVerse?: boolean;
 };
 
-const TAFSIR_SOURCE = "\u2013 \u0627\u0644\u062a\u0641\u0633\u064a\u0631 \u0627\u0644\u0645\u064a\u0633\u0631";
-const TAFSIR_LOADING_TEXT =
-  "\u062c\u0627\u0631\u064a \u062a\u062d\u0645\u064a\u0644 \u0627\u0644\u062a\u0641\u0633\u064a\u0631...";
-const TAFSIR_ERROR_TEXT =
-  "\u062a\u062d\u062a\u0627\u062c \u0625\u0644\u0649 \u0627\u062a\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062a\u0631\u0646\u062a \u0644\u0639\u0631\u0636 \u0627\u0644\u062a\u0641\u0633\u064a\u0631.";
-const SURAH_PREFIX = "\u0633\u0648\u0631\u0629";
+const SURAH_PREFIX = "سورة";
+const DOWNLOAD_LABEL = "تحميل";
+const PREVIEW_LABEL = "معاينة";
+const LISTEN_LABEL = "استماع";
+const SAVE_LABEL = "حفظ";
+const SHARE_LABEL = "مشاركة";
+const AYAH_END_MARKER = "\u06DD";
+const WAQF_MARKER_SPLIT_REGEX = /([\uFBBF\u06DF])/u;
+const WAQF_MARKER_TOKEN_REGEX = /^[\uFBBF\u06DF]$/u;
 
 const stripTrailingAyahMarker = (verseText: string) =>
-  verseText.replace(/\s*\u06DD\s*[0-9\u0660-\u0669]*\s*$/u, "").trimEnd();
+  verseText
+    .replace(
+      /(?:\s*\u06DD\s*[0-9\u0660-\u0669\u06F0-\u06F9]*\s*)+$/u,
+      "",
+    )
+    .trimEnd();
+
+const normalizeVerseTextForDisplay = (verseText: string) =>
+  verseText.normalize("NFC");
 
 export default function QuotePreviewModal({
   visible,
@@ -49,88 +61,47 @@ export default function QuotePreviewModal({
   canGoNextVerse = false,
 }: QuotePreviewModalProps) {
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
-  const [activeMode, setActiveMode] = useState<"tafsir" | "preview">("tafsir");
-  const [tafsirText, setTafsirText] = useState<string | null>(null);
-  const [isTafsirLoading, setIsTafsirLoading] = useState(false);
-  const [tafsirError, setTafsirError] = useState<string | null>(null);
-  const selectedSurahId = quote?.surahId;
-  const selectedVerseNumber = quote?.verseNumber;
-
-  useEffect(() => {
-    if (visible) {
-      setActiveMode("tafsir");
-    }
-  }, [visible, quote?.verseNumber]);
-
-  useEffect(() => {
-    if (!visible || selectedSurahId == null || selectedVerseNumber == null) {
-      setTafsirText(null);
-      setTafsirError(null);
-      setIsTafsirLoading(false);
-      return;
-    }
-
-    const abortController = new AbortController();
-
-    setIsTafsirLoading(true);
-    setTafsirError(null);
-    setTafsirText(null);
-
-    fetchMuyassarTafsir({
-      surahId: selectedSurahId,
-      verseNumber: selectedVerseNumber,
-      signal: abortController.signal,
-    })
-      .then((text) => {
-        if (!abortController.signal.aborted) {
-          setTafsirText(text);
-        }
-      })
-      .catch((error: unknown) => {
-        if (abortController.signal.aborted) return;
-
-        if (error instanceof Error && error.name === "AbortError") {
-          return;
-        }
-
-        setTafsirError(TAFSIR_ERROR_TEXT);
-      })
-      .finally(() => {
-        if (!abortController.signal.aborted) {
-          setIsTafsirLoading(false);
-        }
-      });
-
-    return () => {
-      abortController.abort();
-    };
-  }, [selectedSurahId, selectedVerseNumber, visible]);
-
   const isVisible = visible && quote != null;
+
   if (!quote) return null;
+
   const headerLabel = `${SURAH_PREFIX} ${quote.surahName}`;
   const numericVerse = Number(quote.verseNumber);
   const verseNumberLabel = Number.isFinite(numericVerse)
     ? toArabicNumber(numericVerse)
     : quote.verseNumber;
+
   const cleanVerseText = stripTrailingAyahMarker(quote.verseText);
-  const verseWithMarker = `${cleanVerseText} \u06DD${verseNumberLabel}`;
+  const verseDisplayText = normalizeVerseTextForDisplay(cleanVerseText);
+  const verseDisplayParts = verseDisplayText
+    .split(WAQF_MARKER_SPLIT_REGEX)
+    .filter((part) => part.length > 0);
+
   const verseCharacterCount = cleanVerseText.length;
   const isCompactHeight = windowHeight < 760;
-  const baseVerseFontSize = isCompactHeight ? 42 : 52;
+  const baseVerseFontSize = isCompactHeight ? 34 : 40;
   const scaledVerseFontSize =
-    verseCharacterCount > 140
+    verseCharacterCount > 220
       ? baseVerseFontSize - 10
-      : verseCharacterCount > 95
-        ? baseVerseFontSize - 6
-        : baseVerseFontSize;
-  const verseFontSize = Math.max(30, scaledVerseFontSize);
-  const verseLineHeight = Math.round(verseFontSize * 1.45);
-  const cardWidth = Math.min(windowWidth - 44, 620);
-  const cardMaxHeight = Math.min(windowHeight * 0.9, 900);
-  const isPreviewMode = activeMode === "preview";
-  const showTafsir = activeMode === "tafsir" || isPreviewMode;
-  const showBottomActions = !isPreviewMode;
+      : verseCharacterCount > 170
+        ? baseVerseFontSize - 7
+        : verseCharacterCount > 120
+          ? baseVerseFontSize - 5
+          : verseCharacterCount > 85
+            ? baseVerseFontSize - 2
+            : baseVerseFontSize;
+
+  const verseFontSize = Math.max(27, scaledVerseFontSize);
+  const verseLineHeightMultiplier = Platform.select({
+    ios: 1.74,
+    android: 1.68,
+    default: 1.72,
+  });
+  const verseLineHeight = Math.round(verseFontSize * verseLineHeightMultiplier);
+
+  const cardWidth = Math.min(windowWidth - 34, 620);
+  const cardMaxHeight = Math.min(windowHeight * 0.93, 940);
+  const verseAreaMaxHeight = Math.min(Math.max(windowHeight * 0.47, 220), 430);
   const showVerseNavigation = Boolean(onPreviousVerse || onNextVerse);
 
   return (
@@ -139,22 +110,8 @@ export default function QuotePreviewModal({
         <TouchableWithoutFeedback>
           <View style={[styles.card, { width: cardWidth, maxHeight: cardMaxHeight }]}>
             <Pressable style={styles.closeButton} onPress={onClose} hitSlop={10}>
-              <Ionicons name="close" size={30} color="#8E98A8" />
+              <Ionicons name="close" size={30} color="#7D8EA1" />
             </Pressable>
-
-            {isPreviewMode ? (
-              <Pressable
-                style={styles.previewDownloadButton}
-                onPress={() => {}}
-                hitSlop={10}
-                accessibilityRole="button"
-                accessibilityLabel="\u062a\u062d\u0645\u064a\u0644"
-              >
-                <View style={styles.previewDownloadIconWrap}>
-                  <Ionicons name="download" size={24} color="#8E98A8" />
-                </View>
-              </Pressable>
-            ) : null}
 
             <ScrollView
               style={styles.contentScroll}
@@ -162,127 +119,141 @@ export default function QuotePreviewModal({
               showsVerticalScrollIndicator={false}
             >
               <View style={styles.bannerWrap}>
-                <View style={styles.surahBanner}>
-                  <Text className="font-uthmanic" style={styles.surahBannerText}>
-                    {headerLabel}
-                  </Text>
+                <View style={styles.surahHeaderShell}>
+                  <Svg
+                    width="100%"
+                    height="100%"
+                    viewBox="0 0 960 190"
+                    preserveAspectRatio="xMidYMid meet"
+                  >
+                    <Rect x="0" y="26" width="960" height="138" rx="8" fill="#BFE8F2" />
+                    <Rect x="190" y="37" width="580" height="116" rx="58" fill="#FFFFFF" />
+                    <Circle cx="190" cy="84" r="28" fill="#FFFFFF" />
+                    <Circle cx="190" cy="114" r="24" fill="#FFFFFF" />
+                    <Circle cx="770" cy="84" r="28" fill="#FFFFFF" />
+                    <Circle cx="770" cy="114" r="24" fill="#FFFFFF" />
+                    <Rect x="0" y="22" width="960" height="4" fill="#F2EEE4" />
+                    <Rect x="0" y="164" width="960" height="4" fill="#F2EEE4" />
+                  </Svg>
+
+                  <View pointerEvents="none" style={styles.surahHeaderTextWrap}>
+                    <View style={styles.surahHeaderTextFrame}>
+                      <Text
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.72}
+                        style={styles.surahHeaderText}
+                      >
+                        {headerLabel}
+                      </Text>
+                    </View>
+                  </View>
                 </View>
               </View>
 
-              <View style={styles.contentWrap}>
-                <Text
-                  className="font-uthmanic"
-                  style={[
-                    styles.verseText,
-                    {
-                      fontSize: verseFontSize,
-                      lineHeight: verseLineHeight,
-                    },
-                  ]}
+              <View style={[styles.verseSection, { maxHeight: verseAreaMaxHeight }]}>
+                <ScrollView
+                  style={styles.verseScroll}
+                  contentContainerStyle={styles.verseScrollContent}
+                  showsVerticalScrollIndicator={false}
+                  nestedScrollEnabled
                 >
-                  {verseWithMarker}
-                </Text>
+                  <Text
+                    style={[
+                      styles.verseText,
+                      {
+                        fontSize: verseFontSize,
+                        lineHeight: verseLineHeight,
+                      },
+                    ]}
+                  >
+                    {verseDisplayParts.map((part, index) =>
+                      WAQF_MARKER_TOKEN_REGEX.test(part) ? (
+                        <Text
+                          key={`waqf-${index}`}
+                          style={[
+                            styles.waqfMarker,
+                            {
+                              fontSize: Math.round(verseFontSize * 0.84),
+                              lineHeight: verseLineHeight,
+                            },
+                          ]}
+                        >
+                          {part}
+                        </Text>
+                      ) : (
+                        <Text key={`verse-${index}`}>{part}</Text>
+                      ),
+                    )}
+                    <Text style={styles.verseAyahMarkerText}> {AYAH_END_MARKER}</Text>
+                    <Text style={styles.verseNumberText}>{verseNumberLabel}</Text>
+                  </Text>
+                </ScrollView>
               </View>
-
-              {showTafsir ? (
-                <View style={styles.tafsirSection}>
-                  {isTafsirLoading ? (
-                    <Text className="font-uthmanic" style={styles.tafsirText}>
-                      {TAFSIR_LOADING_TEXT}
-                    </Text>
-                  ) : null}
-                  {!isTafsirLoading && tafsirError ? (
-                    <Text className="font-uthmanic" style={styles.tafsirText}>
-                      {tafsirError}
-                    </Text>
-                  ) : null}
-                  {!isTafsirLoading && !tafsirError && tafsirText ? (
-                    <Text className="font-uthmanic" style={styles.tafsirText}>
-                      {tafsirText}
-                    </Text>
-                  ) : null}
-                  {!isPreviewMode && !isTafsirLoading && !tafsirError && tafsirText ? (
-                    <Text className="font-uthmanic" style={styles.sourceText}>
-                      {TAFSIR_SOURCE}
-                    </Text>
-                  ) : null}
-                </View>
-              ) : null}
             </ScrollView>
 
-            {showBottomActions ? (
-              <>
-                <View style={styles.separator} />
+            <View style={styles.separator} />
 
-                <View style={styles.mainActionsRow}>
-                  {showVerseNavigation ? (
-                    <Pressable
-                      style={styles.navActionWrap}
-                      onPress={onNextVerse}
-                      disabled={!canGoNextVerse}
-                      accessibilityRole="button"
-                      accessibilityLabel="Next verse"
-                    >
-                      <View
-                        style={[
-                          styles.navActionCircle,
-                          !canGoNextVerse && styles.navActionCircleDisabled,
-                        ]}
-                      >
-                        <Ionicons
-                          name="arrow-back"
-                          size={24}
-                          color={canGoNextVerse ? "#95C7D4" : "#C9DCE6"}
-                        />
-                      </View>
-                    </Pressable>
-                  ) : null}
-                  <ActionButton
-                    label="\u062a\u062d\u0645\u064a\u0644"
-                    icon="download"
-                    onPress={() => {}}
-                  />
-                  <ActionButton
-                    label="\u0645\u0639\u0627\u064a\u0646\u0629"
-                    icon="eye"
-                    active={false}
-                    onPress={() => setActiveMode("preview")}
-                  />
-                  <ActionButton
-                    label="\u0627\u0633\u062a\u0645\u0627\u0639"
-                    icon={isVerseAudioLoading ? "download" : "play"}
-                    onPress={() => onPlayVerse(quote)}
-                  />
-                  {showVerseNavigation ? (
-                    <Pressable
-                      style={styles.navActionWrap}
-                      onPress={onPreviousVerse}
-                      disabled={!canGoPreviousVerse}
-                      accessibilityRole="button"
-                      accessibilityLabel="Previous verse"
-                    >
-                      <View
-                        style={[
-                          styles.navActionCircle,
-                          !canGoPreviousVerse && styles.navActionCircleDisabled,
-                        ]}
-                      >
-                        <Ionicons
-                          name="arrow-forward"
-                          size={24}
-                          color={canGoPreviousVerse ? "#95C7D4" : "#C9DCE6"}
-                        />
-                      </View>
-                    </Pressable>
-                  ) : null}
-                </View>
+            <View style={styles.mainActionsRow}>
+              {showVerseNavigation ? (
+                <Pressable
+                  style={styles.navActionWrap}
+                  onPress={onNextVerse}
+                  disabled={!canGoNextVerse}
+                  accessibilityRole="button"
+                  accessibilityLabel="Next verse"
+                >
+                  <View
+                    style={[
+                      styles.navActionCircle,
+                      !canGoNextVerse && styles.navActionCircleDisabled,
+                    ]}
+                  >
+                    <Ionicons
+                      name="arrow-back"
+                      size={24}
+                      color={canGoNextVerse ? "#77BFD0" : "#C1DCE6"}
+                    />
+                  </View>
+                </Pressable>
+              ) : null}
 
-                <View style={styles.secondaryActionsRow}>
-                  <Text style={styles.secondaryActionText}>{"\u062d\u0641\u0638"}</Text>
-                  <Text style={styles.secondaryActionText}>{"\u0645\u0634\u0627\u0631\u0643\u0629"}</Text>
-                </View>
-              </>
-            ) : null}
+              <ActionButton label={DOWNLOAD_LABEL} icon="download" onPress={() => {}} />
+              <ActionButton label={PREVIEW_LABEL} icon="eye" onPress={() => {}} />
+              <ActionButton
+                label={LISTEN_LABEL}
+                icon={isVerseAudioLoading ? "download" : "play"}
+                onPress={() => onPlayVerse(quote)}
+              />
+
+              {showVerseNavigation ? (
+                <Pressable
+                  style={styles.navActionWrap}
+                  onPress={onPreviousVerse}
+                  disabled={!canGoPreviousVerse}
+                  accessibilityRole="button"
+                  accessibilityLabel="Previous verse"
+                >
+                  <View
+                    style={[
+                      styles.navActionCircle,
+                      !canGoPreviousVerse && styles.navActionCircleDisabled,
+                    ]}
+                  >
+                    <Ionicons
+                      name="arrow-forward"
+                      size={24}
+                      color={canGoPreviousVerse ? "#77BFD0" : "#C1DCE6"}
+                    />
+                  </View>
+                </Pressable>
+              ) : null}
+            </View>
+
+            <View style={styles.secondaryActionsRow}>
+              <Text style={styles.secondaryActionText}>{SAVE_LABEL}</Text>
+              <Text style={styles.secondaryActionText}>{SHARE_LABEL}</Text>
+            </View>
           </View>
         </TouchableWithoutFeedback>
       </Pressable>
@@ -293,21 +264,16 @@ export default function QuotePreviewModal({
 type ActionButtonProps = {
   label: string;
   icon: "play" | "eye" | "download";
-  active?: boolean;
   onPress: () => void;
 };
 
-function ActionButton({ label, icon, active = false, onPress }: ActionButtonProps) {
+function ActionButton({ label, icon, onPress }: ActionButtonProps) {
   return (
     <Pressable onPress={onPress} style={styles.actionWrap}>
-      <View style={[styles.actionCircle, active && styles.actionCircleActive]}>
-        <Ionicons
-          name={icon}
-          size={active ? 24 : 22}
-          color={active ? "#FFFFFF" : "#95C7D4"}
-        />
+      <View style={styles.actionCircle}>
+        <Ionicons name={icon} size={22} color="#77BFD0" />
       </View>
-      <Text className="font-uthmanic" style={[styles.actionLabel, active && styles.actionLabelActive]}>
+      <Text numberOfLines={1} style={styles.actionLabel}>
         {label}
       </Text>
     </Pressable>
@@ -317,14 +283,14 @@ function ActionButton({ label, icon, active = false, onPress }: ActionButtonProp
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: "rgba(37, 44, 55, 0.44)",
+    backgroundColor: "rgba(28, 34, 43, 0.46)",
     justifyContent: "center",
     alignItems: "center",
-    paddingHorizontal: 22,
+    paddingHorizontal: 18,
   },
   card: {
     borderRadius: 40,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "#FCFDFC",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 20 },
     shadowOpacity: 0.2,
@@ -332,8 +298,10 @@ const styles = StyleSheet.create({
     elevation: 12,
     overflow: "hidden",
     paddingTop: 18,
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingBottom: 20,
+    borderWidth: 1,
+    borderColor: "#E7EEF2",
   },
   closeButton: {
     position: "absolute",
@@ -341,21 +309,11 @@ const styles = StyleSheet.create({
     top: 16,
     zIndex: 2,
   },
-  previewDownloadButton: {
-    position: "absolute",
-    right: 18,
-    top: 16,
-    zIndex: 2,
-  },
-  previewDownloadIconWrap: {
-    width: 32,
-    height: 32,
-    alignItems: "center",
-    justifyContent: "center",
-  },
   contentScroll: {
+    minHeight: 0,
+    flexGrow: 1,
     flexShrink: 1,
-    marginTop: 40,
+    marginTop: 38,
   },
   contentScrollContent: {
     paddingBottom: 12,
@@ -363,72 +321,82 @@ const styles = StyleSheet.create({
   bannerWrap: {
     alignItems: "center",
   },
-  surahBanner: {
+  surahHeaderShell: {
     width: "100%",
-    maxWidth: 460,
-    minHeight: 52,
-    borderRadius: 14,
-    borderWidth: 1.5,
-    borderColor: "#CFD7E2",
-    backgroundColor: "#F6F8FB",
+    maxWidth: 580,
+    height: 94,
+    position: "relative",
+  },
+  surahHeaderTextWrap: {
+    ...StyleSheet.absoluteFillObject,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 12,
   },
-  surahBannerText: {
-    color: "#384053",
-    fontSize: 24,
-    lineHeight: 34,
+  surahHeaderTextFrame: {
+    width: "63%",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  surahHeaderText: {
+    fontFamily: "Scheherazade",
+    color: "#17263A",
+    fontSize: 34,
+    lineHeight: 40,
     textAlign: "center",
     writingDirection: "rtl",
+    includeFontPadding: false,
+    width: "100%",
   },
-  contentWrap: {
-    paddingHorizontal: 8,
-    paddingTop: 14,
-    paddingBottom: 10,
+  verseSection: {
+    marginTop: 10,
+    borderRadius: 22,
+    backgroundColor: "#EAF6FB",
+    borderWidth: 1,
+    borderColor: "#D5E9F1",
+    padding: 12,
+  },
+  verseScroll: {
+    flexGrow: 0,
+    borderRadius: 16,
+    backgroundColor: "#FFFFFF",
+  },
+  verseScrollContent: {
+    flexGrow: 1,
+    justifyContent: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 18,
   },
   verseText: {
-    color: "#0A1328",
+    fontFamily: Platform.select({
+      ios: "UthmanicHafs",
+      android: "Madani",
+      default: "UthmanicHafs",
+    }),
+    color: "#111C31",
     textAlign: "center",
     writingDirection: "rtl",
+    includeFontPadding: true,
   },
-  tafsirSection: {
-    marginTop: 6,
-    marginHorizontal: 2,
-    borderRadius: 20,
-    backgroundColor: "#EEF4FB",
-    paddingHorizontal: 14,
-    paddingTop: 12,
-    paddingBottom: 12,
+  waqfMarker: {
+    fontFamily: "Amiri",
+    color: "#111C31",
   },
-  tafsirText: {
-    fontSize: 21,
-    lineHeight: 38,
-    color: "#48536A",
-    textAlign: "right",
-    writingDirection: "rtl",
+  verseNumberText: {
+    fontFamily: "Amiri",
+    color: "#111C31",
   },
-  sourceText: {
-    marginTop: 6,
-    fontSize: 17,
-    lineHeight: 28,
-    color: "#7D8AA0",
-    textAlign: "right",
-    writingDirection: "rtl",
-  },
-  previewHint: {
-    fontSize: 22,
-    lineHeight: 34,
-    color: "#7F8A99",
-    textAlign: "center",
-    writingDirection: "rtl",
-    marginTop: 10,
-    marginBottom: 18,
+  verseAyahMarkerText: {
+    fontFamily: Platform.select({
+      ios: "UthmanicHafs",
+      android: "Madani",
+      default: "UthmanicHafs",
+    }),
+    color: "#111C31",
   },
   separator: {
     height: 1,
-    backgroundColor: "#EDF1F4",
-    marginTop: 12,
+    backgroundColor: "#E6EFF3",
+    marginTop: 10,
     marginBottom: 14,
   },
   mainActionsRow: {
@@ -447,40 +415,37 @@ const styles = StyleSheet.create({
     height: 52,
     borderRadius: 26,
     borderWidth: 2,
-    borderColor: "#D2EAF0",
+    borderColor: "#C8E2EB",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "#F8FCFE",
   },
   navActionCircleDisabled: {
-    borderColor: "#E6EFF5",
+    borderColor: "#DEEAF0",
+    backgroundColor: "#FBFDFE",
   },
   actionWrap: {
     alignItems: "center",
-    width: 72,
+    width: 84,
   },
   actionCircle: {
     width: 64,
     height: 64,
     borderRadius: 32,
     borderWidth: 2,
-    borderColor: "#D2EAF0",
+    borderColor: "#C8E2EB",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#FFFFFF",
-  },
-  actionCircleActive: {
-    backgroundColor: "#A8DDEA",
-    borderColor: "#A8DDEA",
+    backgroundColor: "#F8FCFE",
   },
   actionLabel: {
+    fontFamily: "Amiri",
     marginTop: 10,
-    fontSize: 15,
-    color: "#5A6678",
-  },
-  actionLabelActive: {
-    color: "#102038",
-    fontWeight: "700",
+    fontSize: 16,
+    lineHeight: 22,
+    color: "#51637A",
+    textAlign: "center",
+    writingDirection: "rtl",
   },
   secondaryActionsRow: {
     marginTop: 20,
@@ -489,8 +454,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
   },
   secondaryActionText: {
-    fontFamily: "UthmanicHafs",
-    fontSize: 30,
-    color: "#6A7487",
+    fontFamily: "Amiri",
+    fontSize: 22,
+    lineHeight: 30,
+    color: "#5A6C83",
   },
 });

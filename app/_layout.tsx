@@ -3,12 +3,14 @@ import { ClerkLoaded, ClerkProvider } from "@clerk/clerk-expo";
 import { useFonts } from "expo-font";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import * as SecureStore from "expo-secure-store";
-import { Text } from "react-native";
+import { ActivityIndicator, Text } from "react-native";
+import { warmupQuranSvgAssetsInBackground } from "../utils/quranSvgRegistry";
 
 SplashScreen.preventAutoHideAsync();
+const STARTUP_LOADING_MS = 3000;
 
 const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
@@ -36,15 +38,38 @@ export default function RootLayout() {
     Scheherazade: require("../assets/fonts/ScheherazadeNew-Regular.ttf"),
     Amiri: require("../assets/fonts/Amiri-Regular.ttf"),
   });
+  const [showStartupLoader, setShowStartupLoader] = useState(true);
 
   useEffect(() => {
-    if (loaded || error) {
-      SplashScreen.hideAsync();
-    }
+    if (!loaded && !error) return;
+
+    let isActive = true;
+    void SplashScreen.hideAsync();
+    void warmupQuranSvgAssetsInBackground();
+
+    const timer = setTimeout(() => {
+      if (isActive) {
+        setShowStartupLoader(false);
+      }
+    }, STARTUP_LOADING_MS);
+
+    return () => {
+      isActive = false;
+      clearTimeout(timer);
+    };
   }, [loaded, error]);
 
   if (!loaded && !error) {
     return null;
+  }
+
+  if (showStartupLoader) {
+    return (
+      <GestureHandlerRootView className="flex-1 items-center justify-center bg-[#FFFDF5]">
+        <ActivityIndicator size="large" color="#2E8B57" />
+        <Text className="mt-4 text-base text-[#1F1F1F]">Loading Quran pages...</Text>
+      </GestureHandlerRootView>
+    );
   }
 
   if (!publishableKey) {

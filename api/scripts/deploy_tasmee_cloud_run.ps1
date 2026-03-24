@@ -2,7 +2,11 @@ param(
   [string]$ProjectId,
   [string]$Region = "me-central1",
   [string]$ServiceName = "iqraaai-tasmee",
-  [string]$Repository = "iqraaai-api"
+  [string]$Repository = "iqraaai-api",
+  [string]$RecognizerMode = "remote",
+  [string]$RemoteSttUrl,
+  [string]$RemoteSttBearerToken = "",
+  [string]$SpeechGateMode = "auto"
 )
 
 $ErrorActionPreference = "Continue"
@@ -25,6 +29,11 @@ Write-Host "Project: $ProjectId"
 Write-Host "Region: $Region"
 Write-Host "Service: $ServiceName"
 Write-Host "Image: $image"
+Write-Host "Recognizer mode: $RecognizerMode"
+
+if ($RecognizerMode -eq "remote" -and [string]::IsNullOrWhiteSpace($RemoteSttUrl)) {
+  throw "Missing -RemoteSttUrl for remote recognizer mode."
+}
 
 & $gcloud artifacts repositories describe $Repository --location=$Region --project=$ProjectId --format="value(name)" --quiet 1>$null 2>$null
 if ($LASTEXITCODE -ne 0) {
@@ -49,6 +58,18 @@ if ($LASTEXITCODE -ne 0) {
   throw "Cloud Build failed"
 }
 
+$envVars = @(
+  "TASMEE_CORS_ORIGINS=*",
+  "TASMEE_RECOGNIZER_MODE=$RecognizerMode",
+  "TASMEE_SPEECH_GATE_MODE=$SpeechGateMode"
+)
+if (-not [string]::IsNullOrWhiteSpace($RemoteSttUrl)) {
+  $envVars += "TASMEE_REMOTE_STT_URL=$RemoteSttUrl"
+}
+if (-not [string]::IsNullOrWhiteSpace($RemoteSttBearerToken)) {
+  $envVars += "TASMEE_REMOTE_STT_BEARER_TOKEN=$RemoteSttBearerToken"
+}
+
 & $gcloud run deploy $ServiceName `
   --project=$ProjectId `
   --region=$Region `
@@ -59,7 +80,7 @@ if ($LASTEXITCODE -ne 0) {
   --memory=512Mi `
   --min-instances=0 `
   --max-instances=3 `
-  --set-env-vars="TASMEE_CORS_ORIGINS=*" `
+  --set-env-vars=($envVars -join ",") `
   --quiet
 if ($LASTEXITCODE -ne 0) {
   throw "Cloud Run deployment failed"

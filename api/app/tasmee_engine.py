@@ -1,16 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
+import re
+import subprocess
+import time
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 import httpx
 
 from .tasmee_text import tokenize_arabic_text
 
 logger = logging.getLogger(__name__)
+AZURE_STT_HOST_PATTERN = re.compile(
+    r"^[^.]+\.([a-z0-9-]+)\.inference\.ml\.azure\.com$",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -34,11 +43,142 @@ class ChunkRecognitionResult:
     start_anchor_confidence: float | None = None
     transcript: str | None = None
     recognized_tokens: list[str] = field(default_factory=list)
+    stt_latency_meta: dict[str, float] | None = None
+    token_source: str = "none"
+    partial_stability: float | None = None
 
 
 class BaseTasmeeRecognizer:
     def analyze_chunk(self, payload: ChunkRecognitionInput) -> ChunkRecognitionResult:
         raise NotImplementedError
+
+
+def _bool_env(name: str, default: bool = False) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _extract_azure_region_from_url(endpoint_url: str) -> str | None:
+    try:
+        host = (urlparse(endpoint_url).hostname or "").strip().lower()
+    except Exception:
+        return None
+    if not host:
+        return None
+    match = AZURE_STT_HOST_PATTERN.match(host)
+    if not match:
+        return None
+    return match.group(1).strip().lower() or None
+
+
+def _validate_remote_stt_region(endpoint_url: str) -> None:
+    expected_region = (os.getenv("TASMEE_EXPECTED_STT_REGION") or "").strip().lower()
+    strict = _bool_env("TASMEE_STRICT_STT_REGION_CHECK", False)
+    if not expected_region:
+        return
+
+    detected_region = _extract_azure_region_from_url(endpoint_url)
+    if not detected_region:
+        logger.warning(
+            "tasmee remote stt region check skipped: unable to parse azure region from %s",
+            endpoint_url,
+        )
+        return
+    if detected_region == expected_region:
+        return
+
+    message = (
+        f"TASMEE_REMOTE_STT endpoint region mismatch: expected={expected_region}, "
+        f"detected={detected_region}. This can add cross-region latency."
+    )
+    if strict:
+        raise RuntimeError(message)
+    logger.warning(message)
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("invalid %s=%s, using default=%s", name, raw, default)
+        return default
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("invalid %s=%s, using default=%s", name, raw, default)
+        return default
+
+
+def _clamp_remote_frame_ms(value: int) -> int:
+    return max(20, min(40, value))
+
+
+def _decode_audio_bytes_to_pcm16(
+    audio_bytes: bytes,
+    *,
+    sample_rate_hz: int,
+) -> bytes:
+    if not audio_bytes:
+        return b""
+    ffmpeg_bin = (os.getenv("TASMEE_FFMPEG_BIN") or "ffmpeg").strip() or "ffmpeg"
+    command = [
+        ffmpeg_bin,
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        "pipe:0",
+        "-ac",
+        "1",
+        "-ar",
+        str(sample_rate_hz),
+        "-f",
+        "s16le",
+        "pipe:1",
+    ]
+    completed = subprocess.run(
+        command,
+        input=audio_bytes,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode != 0:
+        stderr = (completed.stderr or b"").decode("utf-8", errors="ignore").strip()
+        raise RuntimeError(f"ffmpeg decode failed (code={completed.returncode}): {stderr[:240]}")
+    return completed.stdout or b""
+
+
+def _coerce_tokens(raw_tokens: object) -> list[str]:
+    tokens: list[str] = []
+    if not isinstance(raw_tokens, list):
+        return tokens
+    for item in raw_tokens:
+        if isinstance(item, str) and item.strip():
+            tokens.append(item.strip())
+    return tokens
+
+
+def _longest_common_prefix_tokens(left: list[str], right: list[str]) -> list[str]:
+    if not left or not right:
+        return []
+    limit = min(len(left), len(right))
+    for index in range(limit):
+        if left[index] != right[index]:
+            return left[:index]
+    return left[:limit]
 
 
 class HeuristicTasmeeRecognizer(BaseTasmeeRecognizer):
@@ -247,6 +387,7 @@ class RemoteHttpTasmeeRecognizer(BaseTasmeeRecognizer):
         self._url = (url or os.getenv("TASMEE_REMOTE_STT_URL", "")).strip()
         if not self._url:
             raise RuntimeError("TASMEE_REMOTE_STT_URL is not set; remote recognizer disabled")
+        _validate_remote_stt_region(self._url)
 
         self._bearer_token = (bearer_token or os.getenv("TASMEE_REMOTE_STT_BEARER_TOKEN", "")).strip()
 
@@ -391,16 +532,13 @@ class RemoteWsTasmeeRecognizer(BaseTasmeeRecognizer):
     """
     Remote speech-to-text recognizer over WebSocket.
 
-    This is a "prepare for streaming" implementation: it uses a WebSocket
-    transport but does not keep per-session connections yet. The backend runs
-    analyze_chunk in a worker thread, so it's safe for this implementation to
-    block while awaiting the WS response.
+    Streaming protocol (v2):
+      - Client sends `start` metadata.
+      - Client sends 20-40 ms binary PCM frames.
+      - Client sends `audio_end` to flush final hypothesis.
+      - Server emits `partial`, `final`, `vad_state`, and `latency_meta`.
 
-    Protocol (v1):
-      - Client sends a JSON text frame with metadata.
-      - Client sends a binary frame containing raw audio bytes.
-      - Server replies with a JSON text frame containing `tokens` or `transcript`
-        and optional `confidence`.
+    Falls back to legacy protocol (v1) if streaming fails.
     """
 
     def __init__(
@@ -417,6 +555,7 @@ class RemoteWsTasmeeRecognizer(BaseTasmeeRecognizer):
         self._ws_url = (ws_url or os.getenv("TASMEE_REMOTE_STT_WS_URL", "")).strip()
         if not self._ws_url:
             raise RuntimeError("TASMEE_REMOTE_STT_WS_URL is not set; remote_ws recognizer disabled")
+        _validate_remote_stt_region(self._ws_url)
 
         self._bearer_token = (bearer_token or os.getenv("TASMEE_REMOTE_STT_BEARER_TOKEN", "")).strip()
 
@@ -449,10 +588,21 @@ class RemoteWsTasmeeRecognizer(BaseTasmeeRecognizer):
                 try:
                     resolved_protocol = int(raw_protocol)
                 except ValueError:
-                    resolved_protocol = 1
+                    resolved_protocol = 2
             else:
-                resolved_protocol = 1
+                resolved_protocol = 2
         self._protocol_version = max(1, int(resolved_protocol))
+        self._frame_ms = _clamp_remote_frame_ms(_int_env("TASMEE_REMOTE_STT_FRAME_MS", 30))
+        self._sample_rate_hz = max(8000, _int_env("TASMEE_REMOTE_STT_SAMPLE_RATE_HZ", 16000))
+        self._stream_realtime = _bool_env("TASMEE_REMOTE_STT_STREAM_REALTIME", False)
+        self._final_wait_seconds = max(
+            0.05,
+            _float_env("TASMEE_REMOTE_STT_FINAL_WAIT_SECONDS", self._timeout),
+        )
+        self._return_partial_on_timeout = _bool_env(
+            "TASMEE_REMOTE_STT_RETURN_PARTIAL_ON_TIMEOUT",
+            True,
+        )
 
     def analyze_chunk(self, payload: ChunkRecognitionInput) -> ChunkRecognitionResult:
         level_db = self._resolve_level_db(payload)
@@ -470,9 +620,18 @@ class RemoteWsTasmeeRecognizer(BaseTasmeeRecognizer):
                 confirmed_word_indexes=[],
                 transcript=None,
                 recognized_tokens=[],
+                stt_latency_meta=None,
+                token_source="none",
             )
 
-        transcript, tokens, transcript_confidence = asyncio.run(
+        (
+            transcript,
+            tokens,
+            transcript_confidence,
+            latency_meta,
+            token_source,
+            partial_stability,
+        ) = asyncio.run(
             self._transcribe_ws(
                 audio_bytes=payload.audio_bytes,
                 mime_type=payload.mime_type,
@@ -486,19 +645,16 @@ class RemoteWsTasmeeRecognizer(BaseTasmeeRecognizer):
             else HeuristicTasmeeRecognizer._estimate_confidence(level_db, has_speech)
         )
 
-        normalized_tokens = tokens
-        if not normalized_tokens and transcript:
-            normalized_tokens = tokenize_arabic_text(transcript)
-        elif normalized_tokens:
-            normalized_tokens = tokenize_arabic_text(" ".join(normalized_tokens))
-
         return ChunkRecognitionResult(
             has_speech=True,
             confidence=confidence,
             level_db=level_db,
             confirmed_word_indexes=[],
             transcript=transcript,
-            recognized_tokens=normalized_tokens,
+            recognized_tokens=tokens,
+            stt_latency_meta=latency_meta or None,
+            token_source=token_source,
+            partial_stability=partial_stability,
         )
 
     def _resolve_level_db(self, payload: ChunkRecognitionInput) -> float:
@@ -514,15 +670,42 @@ class RemoteWsTasmeeRecognizer(BaseTasmeeRecognizer):
         audio_bytes: bytes,
         mime_type: str,
         duration_ms: int,
-    ) -> tuple[str | None, list[str], float | None]:
+    ) -> tuple[str | None, list[str], float | None, dict[str, float], str, float | None]:
+        if self._protocol_version <= 1:
+            return await self._transcribe_ws_legacy(
+                audio_bytes=audio_bytes,
+                mime_type=mime_type,
+                duration_ms=duration_ms,
+            )
+        try:
+            return await self._transcribe_ws_streaming(
+                audio_bytes=audio_bytes,
+                mime_type=mime_type,
+                duration_ms=duration_ms,
+            )
+        except Exception as error:
+            logger.warning("remote_ws streaming failed; falling back to legacy protocol: %s", error)
+            return await self._transcribe_ws_legacy(
+                audio_bytes=audio_bytes,
+                mime_type=mime_type,
+                duration_ms=duration_ms,
+            )
+
+    async def _transcribe_ws_legacy(
+        self,
+        *,
+        audio_bytes: bytes,
+        mime_type: str,
+        duration_ms: int,
+    ) -> tuple[str | None, list[str], float | None, dict[str, float], str, float | None]:
         if not audio_bytes:
-            return None, [], None
+            return None, [], None, {}, "none", None
 
         try:
             import websockets  # type: ignore
         except Exception as error:
             logger.warning("websockets dependency missing for remote_ws: %s", error)
-            return None, [], None
+            return None, [], None, {}, "none", None
 
         extra_headers: list[tuple[str, str]] = [
             ("Accept", "application/json"),
@@ -551,12 +734,16 @@ class RemoteWsTasmeeRecognizer(BaseTasmeeRecognizer):
                     self._ws_url,
                     extra_headers=extra_headers,
                     open_timeout=self._timeout,
+                    ping_interval=None,
+                    ping_timeout=None,
                 )
             except TypeError:
                 websocket_ctx = connect(
                     self._ws_url,
                     additional_headers=extra_headers,
                     open_timeout=self._timeout,
+                    ping_interval=None,
+                    ping_timeout=None,
                 )
 
             async with websocket_ctx as websocket:
@@ -565,32 +752,261 @@ class RemoteWsTasmeeRecognizer(BaseTasmeeRecognizer):
                 response_text = await asyncio.wait_for(websocket.recv(), timeout=self._timeout)
         except Exception as error:
             logger.warning("remote_ws stt request failed: %s", error)
-            return None, [], None
+            return None, [], None, {}, "none", None
 
         if not isinstance(response_text, str):
             logger.warning("remote_ws stt invalid response type: %s", type(response_text))
-            return None, [], None
+            return None, [], None, {}, "none", None
 
         try:
             payload = json.loads(response_text)
         except Exception as error:
             logger.warning("remote_ws stt invalid json response: %s", error)
-            return None, [], None
+            return None, [], None, {}, "none", None
 
+        transcript_value, tokens, confidence_value = self._extract_transcript_payload(payload)
+        normalized_tokens = self._normalize_tokens(tokens, transcript_value)
+        latency_meta = self._extract_latency_meta(payload)
+        token_source = "final" if normalized_tokens or transcript_value else "none"
+        return transcript_value, normalized_tokens, confidence_value, latency_meta, token_source, None
+
+    def _extract_transcript_payload(
+        self,
+        payload: dict[str, object],
+    ) -> tuple[str | None, list[str], float | None]:
         transcript = payload.get("transcript")
         transcript_value = transcript.strip() if isinstance(transcript, str) else None
-
         confidence = payload.get("confidence")
         confidence_value = float(confidence) if isinstance(confidence, (int, float)) else None
+        return transcript_value, _coerce_tokens(payload.get("tokens")), confidence_value
 
-        tokens: list[str] = []
-        raw_tokens = payload.get("tokens")
-        if isinstance(raw_tokens, list):
-            for item in raw_tokens:
-                if isinstance(item, str) and item.strip():
-                    tokens.append(item.strip())
+    def _extract_latency_meta(self, payload: dict[str, object]) -> dict[str, float]:
+        metrics: dict[str, float] = {}
+        for key, value in payload.items():
+            if not key.endswith("_ms"):
+                continue
+            if isinstance(value, (int, float)):
+                metrics[key] = float(value)
+        return metrics
 
-        return transcript_value, tokens, confidence_value
+    def _normalize_tokens(
+        self,
+        tokens: list[str],
+        transcript: str | None,
+    ) -> list[str]:
+        normalized_tokens = list(tokens)
+        if not normalized_tokens and transcript:
+            normalized_tokens = tokenize_arabic_text(transcript)
+        elif normalized_tokens:
+            normalized_tokens = tokenize_arabic_text(" ".join(normalized_tokens))
+        return normalized_tokens
+
+    def _iter_pcm_frames(self, pcm_bytes: bytes) -> list[bytes]:
+        if not pcm_bytes:
+            return []
+        frame_size = max(2, int(self._sample_rate_hz * (self._frame_ms / 1000.0)) * 2)
+        return [
+            pcm_bytes[index : index + frame_size]
+            for index in range(0, len(pcm_bytes), frame_size)
+            if pcm_bytes[index : index + frame_size]
+        ]
+
+    async def _transcribe_ws_streaming(
+        self,
+        *,
+        audio_bytes: bytes,
+        mime_type: str,
+        duration_ms: int,
+    ) -> tuple[str | None, list[str], float | None, dict[str, float], str, float | None]:
+        if not audio_bytes:
+            return None, [], None, {}, "none", None
+
+        try:
+            import websockets  # type: ignore
+        except Exception as error:
+            logger.warning("websockets dependency missing for remote_ws: %s", error)
+            return None, [], None, {}, "none", None
+
+        normalized_mime = (mime_type or "").strip().lower()
+        if "pcm" in normalized_mime or "s16le" in normalized_mime:
+            pcm_bytes = audio_bytes
+        else:
+            pcm_bytes = _decode_audio_bytes_to_pcm16(
+                audio_bytes,
+                sample_rate_hz=self._sample_rate_hz,
+            )
+        frames = self._iter_pcm_frames(pcm_bytes)
+        if not frames:
+            return None, [], None, {}, "none", None
+
+        extra_headers: list[tuple[str, str]] = [
+            ("Accept", "application/json"),
+            ("X-Tasmee-Protocol", str(self._protocol_version)),
+            ("X-Tasmee-Language-Codes", ",".join(self._language_codes)),
+            ("X-Tasmee-Duration-Ms", str(int(duration_ms))),
+        ]
+        if self._bearer_token:
+            extra_headers.append(("Authorization", f"Bearer {self._bearer_token}"))
+        if self._model:
+            extra_headers.append(("X-Tasmee-Model", self._model))
+
+        request = {
+            "type": "start",
+            "protocol_version": self._protocol_version,
+            "mime_type": f"audio/pcm;encoding=s16le;rate={self._sample_rate_hz}",
+            "sample_rate_hz": self._sample_rate_hz,
+            "frame_ms": self._frame_ms,
+            "duration_ms": int(duration_ms),
+            "language_codes": list(self._language_codes),
+            "model": self._model,
+        }
+
+        transcript_final: str | None = None
+        tokens_final: list[str] = []
+        confidence_final: float | None = None
+        transcript_partial: str | None = None
+        tokens_partial: list[str] = []
+        confidence_partial: float | None = None
+        stable_partial_tokens: list[str] = []
+        partial_updates = 0
+        latency_meta: dict[str, float] = {}
+        stream_started = time.perf_counter()
+
+        try:
+            connect = websockets.connect  # type: ignore[attr-defined]
+            try:
+                websocket_ctx = connect(
+                    self._ws_url,
+                    extra_headers=extra_headers,
+                    open_timeout=self._timeout,
+                    ping_interval=None,
+                    ping_timeout=None,
+                )
+            except TypeError:
+                websocket_ctx = connect(
+                    self._ws_url,
+                    additional_headers=extra_headers,
+                    open_timeout=self._timeout,
+                    ping_interval=None,
+                    ping_timeout=None,
+                )
+
+            async with websocket_ctx as websocket:
+                final_event = asyncio.Event()
+                receiver_error: str | None = None
+
+                async def _receiver() -> None:
+                    nonlocal transcript_final, tokens_final, confidence_final
+                    nonlocal transcript_partial, tokens_partial, confidence_partial
+                    nonlocal stable_partial_tokens, partial_updates
+                    nonlocal receiver_error
+                    while True:
+                        raw = await websocket.recv()
+                        if not isinstance(raw, str):
+                            continue
+                        try:
+                            payload = json.loads(raw)
+                        except Exception:
+                            continue
+                        if not isinstance(payload, dict):
+                            continue
+
+                        event_type = str(payload.get("type") or "").strip().lower()
+                        if event_type in {"partial", "final"}:
+                            transcript_value, tokens_value, confidence_value = self._extract_transcript_payload(
+                                payload
+                            )
+                            normalized_tokens = self._normalize_tokens(tokens_value, transcript_value)
+                            if event_type == "partial":
+                                transcript_partial = transcript_value
+                                tokens_partial = normalized_tokens
+                                confidence_partial = confidence_value
+                                partial_updates += 1
+                                if partial_updates == 1:
+                                    stable_partial_tokens = list(normalized_tokens)
+                                else:
+                                    stable_partial_tokens = _longest_common_prefix_tokens(
+                                        stable_partial_tokens,
+                                        normalized_tokens,
+                                    )
+                            else:
+                                transcript_final = transcript_value
+                                tokens_final = normalized_tokens
+                                confidence_final = confidence_value
+                                final_event.set()
+                                return
+                        elif event_type == "latency_meta":
+                            latency_meta.update(self._extract_latency_meta(payload))
+                        elif event_type == "error":
+                            receiver_error = str(payload.get("error") or "remote stt error")
+                            final_event.set()
+                            return
+
+                receiver_task = asyncio.create_task(_receiver())
+                final_timed_out = False
+                try:
+                    await websocket.send(json.dumps(request, ensure_ascii=False))
+                    for frame in frames:
+                        await websocket.send(frame)
+                        if self._stream_realtime:
+                            await asyncio.sleep(self._frame_ms / 1000.0)
+                    await websocket.send(json.dumps({"type": "audio_end"}, ensure_ascii=False))
+
+                    try:
+                        await asyncio.wait_for(
+                            final_event.wait(),
+                            timeout=self._final_wait_seconds,
+                        )
+                    except asyncio.TimeoutError:
+                        final_timed_out = True
+                        has_partial = bool(tokens_partial or (transcript_partial or "").strip())
+                        if not self._return_partial_on_timeout or not has_partial:
+                            raise
+                finally:
+                    receiver_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await receiver_task
+
+                if receiver_error:
+                    raise RuntimeError(receiver_error)
+                if final_timed_out:
+                    latency_meta["final_timeout_ms"] = round(self._final_wait_seconds * 1000.0, 2)
+        except Exception as error:
+            logger.warning("remote_ws streaming request failed: %s", error)
+            raise
+
+        elapsed_ms = (time.perf_counter() - stream_started) * 1000.0
+        latency_meta.setdefault("client_stream_elapsed_ms", round(elapsed_ms, 2))
+
+        if transcript_final or tokens_final:
+            return transcript_final, tokens_final, confidence_final, latency_meta, "final", None
+
+        if stable_partial_tokens:
+            partial_stability = (
+                len(stable_partial_tokens) / max(1, len(tokens_partial))
+                if tokens_partial
+                else 0.0
+            )
+            return (
+                transcript_partial,
+                stable_partial_tokens,
+                confidence_partial,
+                latency_meta,
+                "partial",
+                round(partial_stability, 4),
+            )
+
+        if transcript_partial or tokens_partial:
+            partial_stability = 1.0 if partial_updates <= 1 else 0.0
+            return (
+                transcript_partial,
+                tokens_partial,
+                confidence_partial,
+                latency_meta,
+                "partial",
+                partial_stability,
+            )
+        return None, [], None, latency_meta, "none", None
 
 
 class OpenAISttTasmeeRecognizer(BaseTasmeeRecognizer):

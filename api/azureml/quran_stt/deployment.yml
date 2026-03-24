@@ -2,7 +2,9 @@ $schema: https://azuremlschemas.azureedge.net/latest/managedOnlineDeployment.sch
 name: blue
 endpoint_name: iqraaai-quran-stt
 
-# IMPORTANT: replace with your ACR login server + image tag.
+# IMPORTANT:
+# - Replace with your ACR login server + image tag.
+# - Keep Tasmee and Azure ML workspace in the same region.
 environment:
   image: <YOUR_ACR_LOGIN_SERVER>/iqraaai-quran-stt:latest
   inference_config:
@@ -13,19 +15,38 @@ environment:
       path: /healthz
       port: 8010
     readiness_route:
-      path: /healthz
+      path: /readyz
       port: 8010
 
 environment_variables:
   PORT: "8010"
-  STT_MODEL_ID: tarteel-ai/whisper-base-ar-quran
+  STT_RELEASE_CHANNEL: stable
+  # Must be a faster-whisper/CTranslate2 compatible model id or local path.
+  STT_MODEL_ID: Systran/faster-whisper-small
   STT_LANGUAGE: ar
   STT_TASK: transcribe
+  STT_COMPUTE_TYPE: float16
+  STT_BEAM_SIZE: "1"
+  STT_STREAM_PARTIAL_INTERVAL_MS: "240"
+  STT_STREAM_ROLLING_CONTEXT_MS: "8000"
+  STT_STREAM_MAX_ACTIVE_STREAMS: "64"
+  STT_STREAM_DECODE_MAX_CONCURRENCY: "2"
+  STT_STREAM_DECODE_QUEUE_TIMEOUT_SECONDS: "0.25"
+  STT_STREAM_PARTIAL_DECODE_TIMEOUT_SECONDS: "1.2"
+  STT_STREAM_FINAL_DECODE_TIMEOUT_SECONDS: "4.0"
+  STT_STREAM_SKIP_PARTIAL_UNDER_BACKPRESSURE: "true"
+  STT_GPU_METRICS_ENABLED: "true"
+  STT_GPU_METRICS_CACHE_TTL_SECONDS: "2.0"
+  STT_PRELOAD_MODEL: "true"
+  STT_FAIL_ON_PRELOAD_ERROR: "true"
   # Optional auth (recommended when endpoint is reachable outside your VNet):
   # STT_AUTH_TOKEN: <shared-secret>
 
-instance_type: Standard_DS3_v2
+# GPU-backed SKU (example). Pick an available GPU SKU in your workspace region.
+instance_type: Standard_NC4as_T4_v3
+# Keep >= 1 to avoid scale-to-zero cold starts.
 instance_count: 1
 
 request_settings:
   request_timeout_ms: 60000
+  max_concurrent_requests_per_instance: 8

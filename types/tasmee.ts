@@ -50,6 +50,9 @@ export type TasmeeDebugPayload = {
   anchor_word_index?: number | null;
   anchor_verse_end_word_index?: number | null;
   match_score?: number | null;
+  token_source?: string;
+  partial_stability?: number | null;
+  stt_latency_meta?: Record<string, number> | null;
   rate_limited?: boolean;
   timing?: {
     decode_ms?: number;
@@ -67,6 +70,7 @@ export interface TasmeeFeedbackDeltaEvent {
   chunk_seq?: number;
   has_speech?: boolean;
   confidence?: number;
+  token_source?: string;
   start_anchor_word_index?: number;
   start_anchor_confidence?: number;
   confirmed_word_indexes?: number[];

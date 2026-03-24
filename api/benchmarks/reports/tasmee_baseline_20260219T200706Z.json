@@ -1,0 +1,209 @@
+{
+  "run_label": "local-heuristic-baseline",
+  "generated_at": "2026-02-19T20:07:06.169825+00:00",
+  "run_started_at": "2026-02-19T20:06:37.359892+00:00",
+  "run_finished_at": "2026-02-19T20:07:06.169825+00:00",
+  "tasmee_base_url": "http://127.0.0.1:8080",
+  "corpus": {
+    "path": "api\\benchmarks\\tasmee_corpus.baseline.json",
+    "name": "tasmee-phase0-baseline",
+    "description": "Phase 0 baseline corpus covering quiet/noisy captures, device mic profiles, and Quran recitation styles.",
+    "schema_version": 1
+  },
+  "summary": {
+    "sample_count": 5,
+    "success_count": 5,
+    "failure_count": 0,
+    "failure_rate": 0.0,
+    "audio_minutes": 1.9195666666666666,
+    "run_seconds": 28.809933,
+    "client_to_partial_ms": {
+      "count": 5,
+      "avg": 2.484000031836331,
+      "p50": 2.284000045619905,
+      "p95": 3.253099974244833
+    },
+    "client_to_final_ms": {
+      "count": 5,
+      "avg": 3716.9343600282446,
+      "p50": 3374.3344000540674,
+      "p95": 5957.221699994989
+    },
+    "cost": {
+      "stt_hourly_usd": 0.0,
+      "tasmee_hourly_usd": 0.0,
+      "total_hourly_usd": 0.0,
+      "estimated_run_usd": 0.0,
+      "cost_per_audio_min_usd": 0.0
+    }
+  },
+  "cohorts": [
+    {
+      "cohort": "noisy|device_mic|murattal_hafs",
+      "sample_count": 1,
+      "failure_rate": 0.0,
+      "client_to_partial_ms": {
+        "count": 1,
+        "avg": 2.284000045619905,
+        "p50": 2.284000045619905,
+        "p95": 2.284000045619905
+      },
+      "client_to_final_ms": {
+        "count": 1,
+        "avg": 5844.551200047135,
+        "p50": 5844.551200047135,
+        "p95": 5844.551200047135
+      }
+    },
+    {
+      "cohort": "noisy|external_mic|mujawwad",
+      "sample_count": 1,
+      "failure_rate": 0.0,
+      "client_to_partial_ms": {
+        "count": 1,
+        "avg": 2.1182000637054443,
+        "p50": 2.1182000637054443,
+        "p95": 2.1182000637054443
+      },
+      "client_to_final_ms": {
+        "count": 1,
+        "avg": 5957.221699994989,
+        "p50": 5957.221699994989,
+        "p95": 5957.221699994989
+      }
+    },
+    {
+      "cohort": "quiet|device_mic|murattal_hafs",
+      "sample_count": 1,
+      "failure_rate": 0.0,
+      "client_to_partial_ms": {
+        "count": 1,
+        "avg": 3.253099974244833,
+        "p50": 3.253099974244833,
+        "p95": 3.253099974244833
+      },
+      "client_to_final_ms": {
+        "count": 1,
+        "avg": 254.74430003669113,
+        "p50": 254.74430003669113,
+        "p95": 254.74430003669113
+      }
+    },
+    {
+      "cohort": "quiet|device_mic|murattal_hafs_slow",
+      "sample_count": 1,
+      "failure_rate": 0.0,
+      "client_to_partial_ms": {
+        "count": 1,
+        "avg": 2.562300069257617,
+        "p50": 2.562300069257617,
+        "p95": 2.562300069257617
+      },
+      "client_to_final_ms": {
+        "count": 1,
+        "avg": 3374.3344000540674,
+        "p50": 3374.3344000540674,
+        "p95": 3374.3344000540674
+      }
+    },
+    {
+      "cohort": "quiet|external_mic|mujawwad",
+      "sample_count": 1,
+      "failure_rate": 0.0,
+      "client_to_partial_ms": {
+        "count": 1,
+        "avg": 2.202400006353855,
+        "p50": 2.202400006353855,
+        "p95": 2.202400006353855
+      },
+      "client_to_final_ms": {
+        "count": 1,
+        "avg": 3153.82020000834,
+        "p50": 3153.82020000834,
+        "p95": 3153.82020000834
+      }
+    }
+  ],
+  "samples": [
+    {
+      "sample_id": "quiet_device_mic_murattal_short",
+      "condition": "quiet",
+      "device_profile": "device_mic",
+      "recitation_style": "murattal_hafs",
+      "page_number": 1,
+      "surah_id": 1,
+      "audio_ms": 2000,
+      "chunk_count": 3,
+      "accepted_chunks": 3,
+      "success": true,
+      "first_partial_ms": 3.253099974244833,
+      "client_to_final_ms": 254.74430003669113,
+      "failure_reason": null,
+      "error_message": null
+    },
+    {
+      "sample_id": "quiet_device_mic_murattal_medium",
+      "condition": "quiet",
+      "device_profile": "device_mic",
+      "recitation_style": "murattal_hafs_slow",
+      "page_number": 1,
+      "surah_id": 1,
+      "audio_ms": 20000,
+      "chunk_count": 25,
+      "accepted_chunks": 25,
+      "success": true,
+      "first_partial_ms": 2.562300069257617,
+      "client_to_final_ms": 3374.3344000540674,
+      "failure_reason": null,
+      "error_message": null
+    },
+    {
+      "sample_id": "noisy_device_mic_murattal",
+      "condition": "noisy",
+      "device_profile": "device_mic",
+      "recitation_style": "murattal_hafs",
+      "page_number": 1,
+      "surah_id": 1,
+      "audio_ms": 36587,
+      "chunk_count": 46,
+      "accepted_chunks": 46,
+      "success": true,
+      "first_partial_ms": 2.284000045619905,
+      "client_to_final_ms": 5844.551200047135,
+      "failure_reason": null,
+      "error_message": null
+    },
+    {
+      "sample_id": "quiet_external_mic_mujawwad",
+      "condition": "quiet",
+      "device_profile": "external_mic",
+      "recitation_style": "mujawwad",
+      "page_number": 2,
+      "surah_id": 2,
+      "audio_ms": 20000,
+      "chunk_count": 25,
+      "accepted_chunks": 25,
+      "success": true,
+      "first_partial_ms": 2.202400006353855,
+      "client_to_final_ms": 3153.82020000834,
+      "failure_reason": null,
+      "error_message": null
+    },
+    {
+      "sample_id": "noisy_external_mic_mujawwad",
+      "condition": "noisy",
+      "device_profile": "external_mic",
+      "recitation_style": "mujawwad",
+      "page_number": 2,
+      "surah_id": 2,
+      "audio_ms": 36587,
+      "chunk_count": 46,
+      "accepted_chunks": 46,
+      "success": true,
+      "first_partial_ms": 2.1182000637054443,
+      "client_to_final_ms": 5957.221699994989,
+      "failure_reason": null,
+      "error_message": null
+    }
+  ]
+}

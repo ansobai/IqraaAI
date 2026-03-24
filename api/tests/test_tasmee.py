@@ -1,5 +1,6 @@
 import base64
 import json
+import time
 from typing import Callable
 
 import pytest
@@ -64,7 +65,10 @@ def test_healthz():
     with TestClient(app) as client:
         response = client.get("/healthz")
     assert response.status_code == 200
-    assert response.json() == {"ok": True}
+    payload = response.json()
+    assert payload["ok"] is True
+    assert "sessions" in payload
+    assert "load" in payload
 
 
 def test_ws_chunk_upload_emits_status_and_delta():
@@ -287,6 +291,142 @@ class _FixedTokenRecognizer(BaseTasmeeRecognizer):
             transcript="",
             recognized_tokens=list(self._tokens),
         )
+
+
+class _PartialTokenRecognizer(BaseTasmeeRecognizer):
+    def __init__(self, tokens: list[str], *, partial_stability: float):
+        self._tokens = tokens
+        self._partial_stability = partial_stability
+
+    def analyze_chunk(self, payload):  # type: ignore[override]
+        return ChunkRecognitionResult(
+            has_speech=True,
+            confidence=1.0,
+            level_db=float(payload.level_db) if payload.level_db is not None else -120.0,
+            confirmed_word_indexes=[],
+            transcript="",
+            recognized_tokens=list(self._tokens),
+            token_source="partial",
+            partial_stability=self._partial_stability,
+        )
+
+
+class _SlowRecognizer(BaseTasmeeRecognizer):
+    def __init__(self, delay_seconds: float):
+        self._delay_seconds = delay_seconds
+
+    def analyze_chunk(self, payload):  # type: ignore[override]
+        time.sleep(self._delay_seconds)
+        return ChunkRecognitionResult(
+            has_speech=True,
+            confidence=1.0,
+            level_db=float(payload.level_db) if payload.level_db is not None else -120.0,
+            confirmed_word_indexes=[max(0, payload.next_word_index)],
+            transcript="",
+            recognized_tokens=[],
+        )
+
+
+def test_alignment_mode_blocks_unstable_partial_tokens(monkeypatch):
+    lexicon = load_page_lexicon(1)
+    tokens = [word for word in lexicon.words[:4] if word.strip()]
+    assert len(tokens) >= 3
+
+    monkeypatch.setenv("TASMEE_SPEECH_GATE_MODE", "auto")
+    app = create_app(
+        recognizer_override=_PartialTokenRecognizer(tokens, partial_stability=0.2),
+        recognizer_mode_override="remote_ws",
+    )
+
+    with TestClient(app) as client:
+        created = client.post("/v1/tasmee/sessions", json={"page_number": 1, "surah_id": 1})
+        session_id = created.json()["session_id"]
+
+        with client.websocket_connect(f"/v1/tasmee/ws?session_id={session_id}") as websocket:
+            websocket.receive_json()
+            uploaded = client.post(
+                f"/v1/tasmee/sessions/{session_id}/chunks",
+                json=_chunk_payload(seq=1, level_db=None, has_speech=False),
+            )
+            assert uploaded.status_code == 200
+            assert uploaded.json()["accepted"] is False
+
+            status_event = _receive_json_until(
+                websocket,
+                lambda payload: payload.get("type") == "session.status"
+                and payload.get("seq_ack") == 1,
+            )
+            assert status_event["state"] in {"processing", "silent"}
+
+
+def test_recognizer_timeout_degrades_instead_of_stalling():
+    previous_timeout = tasmee_main.RECOGNIZER_HARD_TIMEOUT_SECONDS
+    previous_degrade = tasmee_main.DEGRADE_ON_RECOGNIZER_STALL
+    tasmee_main.RECOGNIZER_HARD_TIMEOUT_SECONDS = 0.01
+    tasmee_main.DEGRADE_ON_RECOGNIZER_STALL = True
+    try:
+        app = create_app(
+            recognizer_override=_SlowRecognizer(delay_seconds=0.05),
+            recognizer_mode_override="remote",
+        )
+        with TestClient(app) as client:
+            created = client.post("/v1/tasmee/sessions", json={"page_number": 1, "surah_id": 1})
+            assert created.status_code == 200
+            session_id = created.json()["session_id"]
+
+            with client.websocket_connect(f"/v1/tasmee/ws?session_id={session_id}") as websocket:
+                websocket.receive_json()
+                uploaded = client.post(
+                    f"/v1/tasmee/sessions/{session_id}/chunks",
+                    json=_chunk_payload(seq=1, level_db=-34.0, has_speech=True),
+                )
+                assert uploaded.status_code == 200
+                assert uploaded.json()["accepted"] is False
+
+                status_event = _receive_json_until(
+                    websocket,
+                    lambda payload: payload.get("type") == "session.status"
+                    and payload.get("seq_ack") == 1,
+                    max_messages=24,
+                )
+                assert status_event.get("degraded") is True
+                assert status_event.get("degraded_reason") == "recognizer_timeout"
+    finally:
+        tasmee_main.RECOGNIZER_HARD_TIMEOUT_SECONDS = previous_timeout
+        tasmee_main.DEGRADE_ON_RECOGNIZER_STALL = previous_degrade
+
+
+def test_alignment_mode_allows_stable_partial_tokens(monkeypatch):
+    lexicon = load_page_lexicon(1)
+    tokens = [word for word in lexicon.words[:4] if word.strip()]
+    assert len(tokens) >= 3
+
+    monkeypatch.setenv("TASMEE_SPEECH_GATE_MODE", "auto")
+    app = create_app(
+        recognizer_override=_PartialTokenRecognizer(tokens, partial_stability=0.95),
+        recognizer_mode_override="remote_ws",
+    )
+
+    with TestClient(app) as client:
+        created = client.post("/v1/tasmee/sessions", json={"page_number": 1, "surah_id": 1})
+        session_id = created.json()["session_id"]
+
+        with client.websocket_connect(f"/v1/tasmee/ws?session_id={session_id}") as websocket:
+            websocket.receive_json()
+            uploaded = client.post(
+                f"/v1/tasmee/sessions/{session_id}/chunks",
+                json=_chunk_payload(seq=1, level_db=None, has_speech=False),
+            )
+            assert uploaded.status_code == 200
+            assert uploaded.json()["accepted"] is True
+
+            delta_event = _receive_json_until(
+                websocket,
+                lambda payload: payload.get("type") == "feedback.delta"
+                and payload.get("seq_ack") == 1,
+            )
+            confirmed = delta_event.get("confirmed_word_indexes") or []
+            assert confirmed[:3] == [0, 1, 2]
 
 
 def test_alignment_mode_allows_progress_without_meter_when_stt_outputs_tokens(monkeypatch):

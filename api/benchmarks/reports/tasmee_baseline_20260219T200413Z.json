@@ -1,0 +1,209 @@
+{
+  "run_label": "smoke",
+  "generated_at": "2026-02-19T20:04:13.293371+00:00",
+  "run_started_at": "2026-02-19T20:04:02.710179+00:00",
+  "run_finished_at": "2026-02-19T20:04:13.293371+00:00",
+  "tasmee_base_url": "http://127.0.0.1:8080",
+  "corpus": {
+    "path": "C:\\Users\\anasa\\Desktop\\IqraaAI\\api\\benchmarks\\tasmee_corpus.baseline.json",
+    "name": "tasmee-phase0-baseline",
+    "description": "Phase 0 baseline corpus covering quiet/noisy captures, device mic profiles, and Quran recitation styles.",
+    "schema_version": 1
+  },
+  "summary": {
+    "sample_count": 5,
+    "success_count": 0,
+    "failure_count": 5,
+    "failure_rate": 1.0,
+    "audio_minutes": 1.9195666666666666,
+    "run_seconds": 10.583192,
+    "client_to_partial_ms": {
+      "count": 0,
+      "avg": null,
+      "p50": null,
+      "p95": null
+    },
+    "client_to_final_ms": {
+      "count": 0,
+      "avg": null,
+      "p50": null,
+      "p95": null
+    },
+    "cost": {
+      "stt_hourly_usd": 0.0,
+      "tasmee_hourly_usd": 0.0,
+      "total_hourly_usd": 0.0,
+      "estimated_run_usd": 0.0,
+      "cost_per_audio_min_usd": 0.0
+    }
+  },
+  "cohorts": [
+    {
+      "cohort": "noisy|device_mic|murattal_hafs",
+      "sample_count": 1,
+      "failure_rate": 1.0,
+      "client_to_partial_ms": {
+        "count": 0,
+        "avg": null,
+        "p50": null,
+        "p95": null
+      },
+      "client_to_final_ms": {
+        "count": 0,
+        "avg": null,
+        "p50": null,
+        "p95": null
+      }
+    },
+    {
+      "cohort": "noisy|external_mic|mujawwad",
+      "sample_count": 1,
+      "failure_rate": 1.0,
+      "client_to_partial_ms": {
+        "count": 0,
+        "avg": null,
+        "p50": null,
+        "p95": null
+      },
+      "client_to_final_ms": {
+        "count": 0,
+        "avg": null,
+        "p50": null,
+        "p95": null
+      }
+    },
+    {
+      "cohort": "quiet|device_mic|murattal_hafs",
+      "sample_count": 1,
+      "failure_rate": 1.0,
+      "client_to_partial_ms": {
+        "count": 0,
+        "avg": null,
+        "p50": null,
+        "p95": null
+      },
+      "client_to_final_ms": {
+        "count": 0,
+        "avg": null,
+        "p50": null,
+        "p95": null
+      }
+    },
+    {
+      "cohort": "quiet|device_mic|murattal_hafs_slow",
+      "sample_count": 1,
+      "failure_rate": 1.0,
+      "client_to_partial_ms": {
+        "count": 0,
+        "avg": null,
+        "p50": null,
+        "p95": null
+      },
+      "client_to_final_ms": {
+        "count": 0,
+        "avg": null,
+        "p50": null,
+        "p95": null
+      }
+    },
+    {
+      "cohort": "quiet|external_mic|mujawwad",
+      "sample_count": 1,
+      "failure_rate": 1.0,
+      "client_to_partial_ms": {
+        "count": 0,
+        "avg": null,
+        "p50": null,
+        "p95": null
+      },
+      "client_to_final_ms": {
+        "count": 0,
+        "avg": null,
+        "p50": null,
+        "p95": null
+      }
+    }
+  ],
+  "samples": [
+    {
+      "sample_id": "quiet_device_mic_murattal_short",
+      "condition": "quiet",
+      "device_profile": "device_mic",
+      "recitation_style": "murattal_hafs",
+      "page_number": 1,
+      "surah_id": 1,
+      "audio_ms": 2000,
+      "chunk_count": 3,
+      "accepted_chunks": 0,
+      "success": false,
+      "first_partial_ms": null,
+      "client_to_final_ms": null,
+      "failure_reason": "runtime_error",
+      "error_message": "All connection attempts failed"
+    },
+    {
+      "sample_id": "quiet_device_mic_murattal_medium",
+      "condition": "quiet",
+      "device_profile": "device_mic",
+      "recitation_style": "murattal_hafs_slow",
+      "page_number": 1,
+      "surah_id": 1,
+      "audio_ms": 20000,
+      "chunk_count": 25,
+      "accepted_chunks": 0,
+      "success": false,
+      "first_partial_ms": null,
+      "client_to_final_ms": null,
+      "failure_reason": "runtime_error",
+      "error_message": "All connection attempts failed"
+    },
+    {
+      "sample_id": "noisy_device_mic_murattal",
+      "condition": "noisy",
+      "device_profile": "device_mic",
+      "recitation_style": "murattal_hafs",
+      "page_number": 1,
+      "surah_id": 1,
+      "audio_ms": 36587,
+      "chunk_count": 46,
+      "accepted_chunks": 0,
+      "success": false,
+      "first_partial_ms": null,
+      "client_to_final_ms": null,
+      "failure_reason": "runtime_error",
+      "error_message": "All connection attempts failed"
+    },
+    {
+      "sample_id": "quiet_external_mic_mujawwad",
+      "condition": "quiet",
+      "device_profile": "external_mic",
+      "recitation_style": "mujawwad",
+      "page_number": 2,
+      "surah_id": 2,
+      "audio_ms": 20000,
+      "chunk_count": 25,
+      "accepted_chunks": 0,
+      "success": false,
+      "first_partial_ms": null,
+      "client_to_final_ms": null,
+      "failure_reason": "runtime_error",
+      "error_message": "All connection attempts failed"
+    },
+    {
+      "sample_id": "noisy_external_mic_mujawwad",
+      "condition": "noisy",
+      "device_profile": "external_mic",
+      "recitation_style": "mujawwad",
+      "page_number": 2,
+      "surah_id": 2,
+      "audio_ms": 36587,
+      "chunk_count": 46,
+      "accepted_chunks": 0,
+      "success": false,
+      "first_partial_ms": null,
+      "client_to_final_ms": null,
+      "failure_reason": "runtime_error",
+      "error_message": "All connection attempts failed"
+    }
+  ]
+}

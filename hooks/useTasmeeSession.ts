@@ -67,6 +67,16 @@ const toErrorMessage = (error: unknown, fallback: string) =>
 const isChunkEndpointUnsupportedError = (message: string) =>
   /(^|\s)(404|not found)(\s|$)/i.test(message);
 
+const toUserFacingTasmeeError = (message: string) => {
+  if (/missing bearer token/i.test(message)) {
+    return "Tasmee requires sign-in. Please sign in and try again.";
+  }
+  if (/invalid token/i.test(message)) {
+    return "Tasmee authentication failed. Please sign in again and retry.";
+  }
+  return message;
+};
+
 export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) => {
   const { getToken } = useAuth();
   const [status, setStatus] = useState<TasmeeSessionStatus>("idle");
@@ -151,7 +161,11 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
   }, [feedbackState]);
 
   const tokenProvider = useCallback(
-    async () => (await getToken()) ?? null,
+    async () => {
+      const token = await getToken();
+      console.log("CLERK_TOKEN", token);
+      return token ?? null;
+    },
     [getToken],
   );
 
@@ -476,7 +490,7 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
         return;
       }
       setStatus("error");
-      setErrorMessage(message);
+      setErrorMessage(toUserFacingTasmeeError(message));
     } finally {
       uploadWorkerRunningRef.current = false;
       if (pendingChunksRef.current.length > 0 && sessionIdRef.current) {
@@ -586,9 +600,7 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
       logTasmee("start session error", error);
       setStatus("error");
       setTransportMode(null);
-      setErrorMessage(
-        toErrorMessage(error, "Failed to start tasmee session."),
-      );
+      setErrorMessage(toUserFacingTasmeeError(toErrorMessage(error, "Failed to start tasmee session.")));
     }
   }, [
     applyDeltaEvent,
@@ -641,7 +653,7 @@ export const useTasmeeSession = ({ pageNumber, surahId }: UseTasmeeSessionArgs) 
       setErrorMessage(null);
     } catch (error) {
       setStatus("error");
-      setErrorMessage(toErrorMessage(error, "Failed to resume tasmee session."));
+      setErrorMessage(toUserFacingTasmeeError(toErrorMessage(error, "Failed to resume tasmee session.")));
     }
   }, [tokenProvider]);
 

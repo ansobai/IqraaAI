@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "name": "tasmee-phase0-baseline",
+  "description": "Phase 0 baseline corpus covering quiet/noisy captures, device mic profiles, and Quran recitation styles.",
+  "defaults": {
+    "chunk_ms": 800,
+    "level_db": -30.0,
+    "has_speech": true,
+    "inter_chunk_delay_ms": 120,
+    "final_wait_ms": 1800
+  },
+  "samples": [
+    {
+      "id": "quiet_device_mic_murattal_short",
+      "path": "../../sample_2s.wav",
+      "page_number": 1,
+      "surah_id": 1,
+      "condition": "quiet",
+      "device_profile": "device_mic",
+      "recitation_style": "murattal_hafs"
+    },
+    {
+      "id": "quiet_device_mic_murattal_medium",
+      "path": "../../sample_20s.wav",
+      "page_number": 1,
+      "surah_id": 1,
+      "condition": "quiet",
+      "device_profile": "device_mic",
+      "recitation_style": "murattal_hafs_slow"
+    },
+    {
+      "id": "noisy_device_mic_murattal",
+      "path": "../../sample.wav",
+      "page_number": 1,
+      "surah_id": 1,
+      "condition": "noisy",
+      "device_profile": "device_mic",
+      "recitation_style": "murattal_hafs"
+    },
+    {
+      "id": "quiet_external_mic_mujawwad",
+      "path": "../../sample_20s.wav",
+      "page_number": 2,
+      "surah_id": 2,
+      "condition": "quiet",
+      "device_profile": "external_mic",
+      "recitation_style": "mujawwad"
+    },
+    {
+      "id": "noisy_external_mic_mujawwad",
+      "path": "../../sample.wav",
+      "page_number": 2,
+      "surah_id": 2,
+      "condition": "noisy",
+      "device_profile": "external_mic",
+      "recitation_style": "mujawwad"
+    }
+  ]
+}

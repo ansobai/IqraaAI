@@ -1,0 +1,44 @@
+$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineDeployment.schema.json
+name: green
+endpoint_name: iqraaai-quran-stt
+
+environment:
+  image: <YOUR_ACR_LOGIN_SERVER>/iqraaai-quran-stt:latest
+  inference_config:
+    scoring_route:
+      path: /score
+      port: 8010
+    liveness_route:
+      path: /healthz
+      port: 8010
+    readiness_route:
+      path: /readyz
+      port: 8010
+
+environment_variables:
+  PORT: "8010"
+  STT_RELEASE_CHANNEL: canary
+  STT_MODEL_ID: Systran/faster-whisper-small
+  STT_LANGUAGE: ar
+  STT_TASK: transcribe
+  STT_COMPUTE_TYPE: float16
+  STT_BEAM_SIZE: "1"
+  STT_STREAM_PARTIAL_INTERVAL_MS: "240"
+  STT_STREAM_ROLLING_CONTEXT_MS: "8000"
+  STT_STREAM_MAX_ACTIVE_STREAMS: "64"
+  STT_STREAM_DECODE_MAX_CONCURRENCY: "2"
+  STT_STREAM_DECODE_QUEUE_TIMEOUT_SECONDS: "0.25"
+  STT_STREAM_PARTIAL_DECODE_TIMEOUT_SECONDS: "1.2"
+  STT_STREAM_FINAL_DECODE_TIMEOUT_SECONDS: "4.0"
+  STT_STREAM_SKIP_PARTIAL_UNDER_BACKPRESSURE: "true"
+  STT_GPU_METRICS_ENABLED: "true"
+  STT_GPU_METRICS_CACHE_TTL_SECONDS: "2.0"
+  STT_PRELOAD_MODEL: "true"
+  STT_FAIL_ON_PRELOAD_ERROR: "true"
+
+instance_type: Standard_NC4as_T4_v3
+instance_count: 1
+
+request_settings:
+  request_timeout_ms: 60000
+  max_concurrent_requests_per_instance: 8

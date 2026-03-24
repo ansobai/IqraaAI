@@ -3,9 +3,11 @@ import React, { useEffect, useState } from "react";
 import {
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableWithoutFeedback,
+  useWindowDimensions,
   View,
 } from "react-native";
 
@@ -29,9 +31,29 @@ const TAFSIR_LOADING_TEXT =
 const TAFSIR_ERROR_TEXT =
   "\u062a\u062d\u062a\u0627\u062c \u0625\u0644\u0649 \u0627\u062a\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062a\u0631\u0646\u062a \u0644\u0639\u0631\u0636 \u0627\u0644\u062a\u0641\u0633\u064a\u0631.";
 const SURAH_PREFIX = "\u0633\u0648\u0631\u0629";
+const ACTION_LABEL_DOWNLOAD = "\u062a\u062d\u0645\u064a\u0644";
+const ACTION_LABEL_PREVIEW = "\u0645\u0639\u0627\u064a\u0646\u0629";
+const ACTION_LABEL_LISTEN = "\u0627\u0633\u062a\u0645\u0627\u0639";
+const SECONDARY_LABEL_SAVE = "\u062d\u0641\u0638";
+const SECONDARY_LABEL_SHARE = "\u0645\u0634\u0627\u0631\u0643\u0629";
+const CARD_MIN_HEIGHT = 520;
+const CARD_MAX_HEIGHT = 760;
+const CARD_HEIGHT_RATIO = 0.78;
+const CARD_SCREEN_MARGIN = 32;
 
-const stripTrailingAyahMarker = (verseText: string) =>
-  verseText.replace(/\s*\u06DD\s*[0-9\u0660-\u0669]*\s*$/u, "").trimEnd();
+const TRAILING_AYAH_MARKER_REGEX =
+  /[\s\u200E\u200F]*\u06DD[\s\u200E\u200F]*[0-9\u0660-\u0669]*[\s\u200E\u200F]*$/u;
+
+const stripTrailingAyahMarker = (verseText: string) => {
+  let normalizedText = verseText.trimEnd();
+
+  // Some sources include duplicated trailing ayah markers; remove all of them before appending one.
+  while (TRAILING_AYAH_MARKER_REGEX.test(normalizedText)) {
+    normalizedText = normalizedText.replace(TRAILING_AYAH_MARKER_REGEX, "").trimEnd();
+  }
+
+  return normalizedText;
+};
 
 export default function QuotePreviewModal({
   visible,
@@ -42,6 +64,7 @@ export default function QuotePreviewModal({
   canGoPreviousVerse = false,
   canGoNextVerse = false,
 }: QuotePreviewModalProps) {
+  const { height: viewportHeight } = useWindowDimensions();
   const [activeMode, setActiveMode] = useState<"tafsir" | "preview">("tafsir");
   const [tafsirText, setTafsirText] = useState<string | null>(null);
   const [isTafsirLoading, setIsTafsirLoading] = useState(false);
@@ -111,12 +134,20 @@ export default function QuotePreviewModal({
   const showTafsir = activeMode === "tafsir" || isPreviewMode;
   const showBottomActions = !isPreviewMode;
   const showVerseNavigation = Boolean(onPreviousVerse || onNextVerse);
+  const targetCardHeight = Math.min(
+    CARD_MAX_HEIGHT,
+    Math.max(CARD_MIN_HEIGHT, Math.round(viewportHeight * CARD_HEIGHT_RATIO)),
+  );
+  const cardHeight = Math.min(
+    targetCardHeight,
+    Math.max(0, Math.round(viewportHeight - CARD_SCREEN_MARGIN)),
+  );
 
   return (
     <Modal visible={isVisible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose}>
         <TouchableWithoutFeedback>
-          <View style={styles.card}>
+          <View style={[styles.card, { height: cardHeight }]}>
             <Pressable style={styles.closeButton} onPress={onClose} hitSlop={10}>
               <Ionicons name="close" size={30} color="#8E98A8" />
             </Pressable>
@@ -127,7 +158,7 @@ export default function QuotePreviewModal({
                 onPress={() => {}}
                 hitSlop={10}
                 accessibilityRole="button"
-                accessibilityLabel="\u062a\u062d\u0645\u064a\u0644"
+                accessibilityLabel={ACTION_LABEL_DOWNLOAD}
               >
                 <View style={styles.previewDownloadIconWrap}>
                   <Ionicons name="download" size={24} color="#8E98A8" />
@@ -139,36 +170,44 @@ export default function QuotePreviewModal({
               {headerLabel}
             </Text>
 
-            <View style={styles.contentWrap}>
-              <Text className="font-uthmanic" style={styles.verseText}>
-                {verseWithMarker}
-              </Text>
-            </View>
+            <View style={styles.body}>
+              <ScrollView
+                style={styles.textScroll}
+                contentContainerStyle={styles.textScrollContent}
+                showsVerticalScrollIndicator
+              >
+                <View style={styles.contentWrap}>
+                  <Text className="font-uthmanic" style={styles.verseText}>
+                    {verseWithMarker}
+                  </Text>
+                </View>
 
-            {showTafsir ? (
-              <View style={styles.tafsirSection}>
-                {isTafsirLoading ? (
-                  <Text className="font-uthmanic" style={styles.tafsirText}>
-                    {TAFSIR_LOADING_TEXT}
-                  </Text>
+                {showTafsir ? (
+                  <View style={styles.tafsirSection}>
+                    {isTafsirLoading ? (
+                      <Text className="font-uthmanic" style={styles.tafsirText}>
+                        {TAFSIR_LOADING_TEXT}
+                      </Text>
+                    ) : null}
+                    {!isTafsirLoading && tafsirError ? (
+                      <Text className="font-uthmanic" style={styles.tafsirText}>
+                        {tafsirError}
+                      </Text>
+                    ) : null}
+                    {!isTafsirLoading && !tafsirError && tafsirText ? (
+                      <Text className="font-uthmanic" style={styles.tafsirText}>
+                        {tafsirText}
+                      </Text>
+                    ) : null}
+                    {!isPreviewMode && !isTafsirLoading && !tafsirError && tafsirText ? (
+                      <Text className="font-uthmanic" style={styles.sourceText}>
+                        {TAFSIR_SOURCE}
+                      </Text>
+                    ) : null}
+                  </View>
                 ) : null}
-                {!isTafsirLoading && tafsirError ? (
-                  <Text className="font-uthmanic" style={styles.tafsirText}>
-                    {tafsirError}
-                  </Text>
-                ) : null}
-                {!isTafsirLoading && !tafsirError && tafsirText ? (
-                  <Text className="font-uthmanic" style={styles.tafsirText}>
-                    {tafsirText}
-                  </Text>
-                ) : null}
-                {!isPreviewMode && !isTafsirLoading && !tafsirError && tafsirText ? (
-                  <Text className="font-uthmanic" style={styles.sourceText}>
-                    {TAFSIR_SOURCE}
-                  </Text>
-                ) : null}
-              </View>
-            ) : null}
+              </ScrollView>
+            </View>
 
             {showBottomActions ? (
               <>
@@ -198,18 +237,18 @@ export default function QuotePreviewModal({
                     </Pressable>
                   ) : null}
                   <ActionButton
-                    label="\u062a\u062d\u0645\u064a\u0644"
+                    label={ACTION_LABEL_DOWNLOAD}
                     icon="download"
                     onPress={() => {}}
                   />
                   <ActionButton
-                    label="\u0645\u0639\u0627\u064a\u0646\u0629"
+                    label={ACTION_LABEL_PREVIEW}
                     icon="eye"
                     active={false}
                     onPress={() => setActiveMode("preview")}
                   />
                   <ActionButton
-                    label="\u0627\u0633\u062a\u0645\u0627\u0639"
+                    label={ACTION_LABEL_LISTEN}
                     icon="play"
                     onPress={() => {}}
                   />
@@ -238,8 +277,8 @@ export default function QuotePreviewModal({
                 </View>
 
                 <View style={styles.secondaryActionsRow}>
-                  <Text style={styles.secondaryActionText}>{"\u062d\u0641\u0638"}</Text>
-                  <Text style={styles.secondaryActionText}>{"\u0645\u0634\u0627\u0631\u0643\u0629"}</Text>
+                  <Text style={styles.secondaryActionText}>{SECONDARY_LABEL_SAVE}</Text>
+                  <Text style={styles.secondaryActionText}>{SECONDARY_LABEL_SHARE}</Text>
                 </View>
               </>
             ) : null}
@@ -296,7 +335,17 @@ const styles = StyleSheet.create({
     paddingTop: 26,
     paddingHorizontal: 22,
     paddingBottom: 26,
-    minHeight: 560,
+  },
+  body: {
+    flex: 1,
+    minHeight: 0,
+    marginTop: 6,
+  },
+  textScroll: {
+    flex: 1,
+  },
+  textScrollContent: {
+    paddingBottom: 8,
   },
   headerText: {
     alignSelf: "center",
@@ -326,7 +375,7 @@ const styles = StyleSheet.create({
   },
   contentWrap: {
     paddingHorizontal: 12,
-    paddingTop: 18,
+    paddingTop: 14,
     paddingBottom: 14,
   },
   verseText: {

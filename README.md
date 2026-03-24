@@ -69,6 +69,7 @@ Key Tasmee env flags (`api/.env.example`):
 - `TASMEE_RECOGNIZER_SHADOW=true|false`
 - `TASMEE_GOOGLE_RECOGNIZER` (required for `google` mode)
 - `TASMEE_REMOTE_STT_URL` (required for `remote` mode)
+- `TASMEE_REMOTE_STT_WS_URL` (required for `remote_ws` mode)
 - `OPENAI_API_KEY` (required for `openai` mode)
 - `TASMEE_HARD_SPEECH_LEVEL_DB_THRESHOLD` (default `-35`)
 - `TASMEE_PAUSE_SILENCE_SECONDS` (default `10`)
@@ -76,7 +77,12 @@ Key Tasmee env flags (`api/.env.example`):
 Cloud Run deploy script:
 
 ```powershell
-./api/scripts/deploy_tasmee_cloud_run.ps1 -ProjectId <your-project-id> -Region me-central1
+./api/scripts/deploy_tasmee_cloud_run.ps1 `
+  -ProjectId <your-project-id> `
+  -Region me-central1 `
+  -RecognizerMode remote `
+  -RemoteSttUrl <https://your-stt-endpoint> `
+  -RemoteSttBearerToken <optional-token>
 ```
 
 ## Quran STT (Self-hosted model on Azure ML)
@@ -85,6 +91,57 @@ If you want a Qur'an-tuned Whisper model (e.g. `tarteel-ai/whisper-base-ar-quran
 
 - STT service: `api/stt_service/README.md`
 - Azure ML endpoint templates: `api/azureml/quran_stt/README.md`
+
+## Phase 0 Baseline Harness
+
+Run the baseline benchmark to measure:
+
+- client-to-partial latency (`feedback.delta` first event)
+- client-to-final latency (last `feedback.delta` after uploads finish)
+- p50/p95, failure rate, and cost per audio minute
+
+```bash
+python api/scripts/run_tasmee_benchmark.py \
+  --tasmee-base-url http://127.0.0.1:8080 \
+  --corpus api/benchmarks/tasmee_corpus.baseline.json \
+  --stt-hourly-usd 1.20 \
+  --tasmee-hourly-usd 0.35
+```
+
+Artifacts:
+
+- `api/benchmarks/reports/tasmee_baseline_latest.json`
+- `api/benchmarks/reports/tasmee_baseline_latest.md`
+
+## Phase 1 Region and Warm Endpoint Settings
+
+- Deploy Tasmee compute and Azure ML workspace in the same region.
+- Use GPU deployment defaults in `api/azureml/quran_stt/deployment.yml`.
+- Keep `instance_count >= 1`.
+- Enable model preload:
+  - `STT_PRELOAD_MODEL=true`
+  - `STT_FAIL_ON_PRELOAD_ERROR=true`
+- Optional Tasmee guard:
+  - `TASMEE_EXPECTED_STT_REGION=<azure-region>`
+  - `TASMEE_STRICT_STT_REGION_CHECK=true`
+
+## Phase 2 Streaming WS Settings
+
+- `TASMEE_RECOGNIZER_MODE=remote_ws`
+- `TASMEE_REMOTE_STT_PROTOCOL_VERSION=2`
+- `TASMEE_REMOTE_STT_FRAME_MS=30` (20-40)
+- `TASMEE_REMOTE_STT_SAMPLE_RATE_HZ=16000`
+- `TASMEE_FFMPEG_BIN=ffmpeg` (Tasmee decodes client chunks to PCM frames before streaming)
+
+## Phase 3 Low-Latency STT Runtime
+
+STT service now uses `faster-whisper` runtime with streaming partial decode and rolling context windows.
+
+- `STT_MODEL_ID=<ctranslate2-model-id>`
+- `STT_USE_CUDA=true`
+- `STT_COMPUTE_TYPE=float16` (GPU) or `int8` (CPU)
+- `STT_STREAM_PARTIAL_INTERVAL_MS`
+- `STT_STREAM_ROLLING_CONTEXT_MS`
 
 ## Database (Postgres)
 

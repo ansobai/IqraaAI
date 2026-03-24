@@ -9,6 +9,7 @@ import logging
 import os
 import secrets
 import statistics
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -89,6 +90,15 @@ MATCH_SLACK = max(0, _int_env("TASMEE_MATCH_SLACK", 2))
 MAX_TOKEN_BUFFER = max(1, _int_env("TASMEE_MAX_TOKEN_BUFFER", 256))
 MAX_ANCHOR_TOKENS = max(1, _int_env("TASMEE_MAX_ANCHOR_TOKENS", 16))
 FUZZY_OVERLAP_MAX_DISTANCE = max(0, _int_env("TASMEE_FUZZY_OVERLAP_MAX_DISTANCE", 0))
+PARTIAL_PROGRESS_MIN_STABILITY = max(
+    0.0,
+    min(1.0, _float_env("TASMEE_PARTIAL_PROGRESS_MIN_STABILITY", 0.55)),
+)
+PARTIAL_ANCHOR_MIN_TOKENS = max(
+    1,
+    _int_env("TASMEE_PARTIAL_ANCHOR_MIN_TOKENS", ANCHOR_MIN_WORDS),
+)
+PARTIAL_TRACK_MIN_TOKENS = max(1, _int_env("TASMEE_PARTIAL_TRACK_MIN_TOKENS", 2))
 REQUIRE_AUTH = _bool_env("TASMEE_REQUIRE_AUTH", True)
 WS_TOKEN_TTL_SECONDS = max(30, _int_env("TASMEE_WS_TOKEN_TTL_SECONDS", 900))
 MAX_CHUNK_BYTES = max(1, _int_env("TASMEE_MAX_CHUNK_BYTES", 2_000_000))
@@ -96,6 +106,17 @@ RATE_LIMIT_CHUNKS_PER_SECOND = max(0.1, _float_env("TASMEE_RATE_LIMIT_CHUNKS_PER
 RATE_LIMIT_BURST = max(1.0, _float_env("TASMEE_RATE_LIMIT_BURST", 20.0))
 PRUNE_INTERVAL_SECONDS = max(10, _int_env("TASMEE_PRUNE_INTERVAL_SECONDS", 60))
 WS_AUDIO_UPLOAD_ENABLED = _bool_env("TASMEE_WS_AUDIO_UPLOAD_ENABLED", True)
+MAX_ACTIVE_SESSIONS = max(1, _int_env("TASMEE_MAX_ACTIVE_SESSIONS", 5000))
+RECOGNIZER_MAX_INFLIGHT = max(1, _int_env("TASMEE_RECOGNIZER_MAX_INFLIGHT", 8))
+RECOGNIZER_QUEUE_TIMEOUT_SECONDS = max(
+    0.01,
+    _float_env("TASMEE_RECOGNIZER_QUEUE_TIMEOUT_SECONDS", 0.25),
+)
+RECOGNIZER_HARD_TIMEOUT_SECONDS = max(
+    0.05,
+    _float_env("TASMEE_RECOGNIZER_HARD_TIMEOUT_SECONDS", 3.0),
+)
+DEGRADE_ON_RECOGNIZER_STALL = _bool_env("TASMEE_DEGRADE_ON_RECOGNIZER_STALL", True)
 
 
 class TasmeeSessionCreateRequest(BaseModel):
@@ -177,8 +198,38 @@ class SessionState:
     latency_total_ms_samples: list[float] = field(default_factory=list)
     rate_limit_tokens: float = RATE_LIMIT_BURST
     rate_limit_updated_at: float = field(default_factory=time.time)
+    recognizer_timeouts: int = 0
+    recognizer_backpressure: int = 0
+    degraded_fallbacks: int = 0
+    listener_event_drops: int = 0
+    last_degraded_reason: str | None = None
     listeners: set[asyncio.Queue[dict]] = field(default_factory=set, repr=False)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+
+
+@dataclass
+class TasmeeLoadState:
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    recognizer_inflight: int = 0
+    recognizer_queue_depth: int = 0
+    recognizer_backpressure: int = 0
+    recognizer_timeouts: int = 0
+    degraded_fallbacks: int = 0
+
+    def add(self, key: str, delta: int = 1) -> None:
+        with self.lock:
+            current = int(getattr(self, key))
+            setattr(self, key, max(0, current + delta))
+
+    def snapshot(self) -> dict[str, int]:
+        with self.lock:
+            return {
+                "recognizer_inflight": self.recognizer_inflight,
+                "recognizer_queue_depth": self.recognizer_queue_depth,
+                "recognizer_backpressure": self.recognizer_backpressure,
+                "recognizer_timeouts": self.recognizer_timeouts,
+                "degraded_fallbacks": self.degraded_fallbacks,
+            }
 
 
 class SessionStore:
@@ -201,6 +252,9 @@ class SessionStore:
         spans = build_verse_spans(len(lexicon.words), lexicon.verse_start_word_indexes)
 
         async with self._lock:
+            active_sessions = sum(1 for session in self._sessions.values() if not session.stopped)
+            if active_sessions >= MAX_ACTIVE_SESSIONS:
+                raise RuntimeError("tasmee overloaded: active session limit reached")
             session_id = str(uuid.uuid4())
             self._sessions[session_id] = SessionState(
                 page_number=page_number,
@@ -299,7 +353,22 @@ class SessionStore:
                     queue.put_nowait(event)
                 except asyncio.QueueFull:
                     # Drop event if consumer is too slow.
-                    pass
+                    session.listener_event_drops += 1
+
+    async def stats(self) -> dict[str, int]:
+        async with self._lock:
+            active_sessions = sum(1 for session in self._sessions.values() if not session.stopped)
+            total_listeners = sum(len(session.listeners) for session in self._sessions.values())
+            total_listener_drops = sum(
+                session.listener_event_drops for session in self._sessions.values()
+            )
+            return {
+                "active_sessions": active_sessions,
+                "stored_sessions": len(self._sessions),
+                "active_ws_listeners": total_listeners,
+                "listener_event_drops": total_listener_drops,
+                "issued_ws_tokens": len(self._ws_tokens),
+            }
 
     def _prune_locked(self, max_age_seconds: int) -> None:
         now = time.time()
@@ -405,6 +474,10 @@ def _build_status_event(
     }
     if capabilities:
         event["capabilities"] = capabilities
+
+    if session.last_degraded_reason:
+        event["degraded"] = True
+        event["degraded_reason"] = session.last_degraded_reason
 
     if resolved_state == "paused":
         resolved_pause_reason = pause_reason or session.pause_reason or "silence_timeout"
@@ -765,6 +838,29 @@ def _apply_progress_from_recognition(
     return _apply_heuristic_progress(session, recognition)
 
 
+def _allow_alignment_partial_progress(
+    session: SessionState,
+    recognition: ChunkRecognitionResult,
+) -> bool:
+    if recognition.token_source != "partial":
+        return True
+    tokens = recognition.recognized_tokens or []
+    if not tokens:
+        return False
+
+    min_tokens = (
+        PARTIAL_TRACK_MIN_TOKENS
+        if session.recitation_state == "tracking"
+        else PARTIAL_ANCHOR_MIN_TOKENS
+    )
+    if len(tokens) < min_tokens:
+        return False
+
+    if recognition.partial_stability is None:
+        return True
+    return recognition.partial_stability >= PARTIAL_PROGRESS_MIN_STABILITY
+
+
 def _apply_shadow_recognition(
     session: SessionState,
     payload: ChunkRecognitionInput,
@@ -846,6 +942,76 @@ def create_app(
             else None
         )
     )
+    load_state = TasmeeLoadState()
+    recognizer_slots = asyncio.Semaphore(RECOGNIZER_MAX_INFLIGHT)
+
+    def _fallback_recognition_for_payload(
+        payload: TasmeeChunkUploadRequest,
+    ) -> ChunkRecognitionResult:
+        resolved_level_db = (
+            float(payload.level_db)
+            if payload.level_db is not None
+            else (-35.0 if payload.has_speech is True else -120.0)
+        )
+        has_speech = (
+            payload.has_speech
+            if payload.has_speech is not None
+            else resolved_level_db >= HARD_SPEECH_LEVEL_DB_THRESHOLD
+        )
+        return ChunkRecognitionResult(
+            has_speech=bool(has_speech),
+            confidence=0.0,
+            level_db=resolved_level_db,
+            confirmed_word_indexes=[],
+            transcript=None,
+            recognized_tokens=[],
+            token_source="fallback",
+        )
+
+    async def _analyze_with_limits(
+        *,
+        payload: TasmeeChunkUploadRequest,
+        recognition_input: ChunkRecognitionInput,
+    ) -> tuple[ChunkRecognitionResult, str | None]:
+        load_state.add("recognizer_queue_depth", 1)
+        try:
+            try:
+                await asyncio.wait_for(
+                    recognizer_slots.acquire(),
+                    timeout=RECOGNIZER_QUEUE_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                load_state.add("recognizer_backpressure", 1)
+                if not DEGRADE_ON_RECOGNIZER_STALL:
+                    raise
+                return _fallback_recognition_for_payload(payload), "recognizer_backpressure"
+        finally:
+            load_state.add("recognizer_queue_depth", -1)
+
+        load_state.add("recognizer_inflight", 1)
+        try:
+            try:
+                result = await asyncio.wait_for(
+                    anyio.to_thread.run_sync(
+                        recognizer.analyze_chunk,
+                        recognition_input,
+                    ),
+                    timeout=RECOGNIZER_HARD_TIMEOUT_SECONDS,
+                )
+                return result, None
+            except asyncio.TimeoutError:
+                load_state.add("recognizer_timeouts", 1)
+                if not DEGRADE_ON_RECOGNIZER_STALL:
+                    raise
+                return _fallback_recognition_for_payload(payload), "recognizer_timeout"
+            except Exception as exc:
+                logger.warning("tasmee recognizer failed: %s", exc)
+                if not DEGRADE_ON_RECOGNIZER_STALL:
+                    raise
+                return _fallback_recognition_for_payload(payload), "recognizer_error"
+        finally:
+            load_state.add("recognizer_inflight", -1)
+            recognizer_slots.release()
 
     cors_origins = _parse_cors_origins()
     app.add_middleware(
@@ -965,7 +1131,21 @@ def create_app(
 
     @app.get("/healthz")
     async def healthz():
-        return {"ok": True}
+        session_metrics = await store.stats()
+        return {
+            "ok": True,
+            "recognizer_mode": recognizer_mode,
+            "ws_audio_upload_enabled": WS_AUDIO_UPLOAD_ENABLED,
+            "degrade_on_recognizer_stall": DEGRADE_ON_RECOGNIZER_STALL,
+            "limits": {
+                "max_active_sessions": MAX_ACTIVE_SESSIONS,
+                "recognizer_max_inflight": RECOGNIZER_MAX_INFLIGHT,
+                "recognizer_queue_timeout_seconds": RECOGNIZER_QUEUE_TIMEOUT_SECONDS,
+                "recognizer_hard_timeout_seconds": RECOGNIZER_HARD_TIMEOUT_SECONDS,
+            },
+            "sessions": session_metrics,
+            "load": load_state.snapshot(),
+        }
 
     @app.post("/v1/tasmee/sessions", response_model=TasmeeSessionCreateResponse)
     async def create_session(payload: TasmeeSessionCreateRequest, request: Request):
@@ -974,12 +1154,15 @@ def create_app(
             auth_settings,
         )
         attempt_id = str(uuid.uuid4())
-        session_id = await store.create(
-            payload.page_number,
-            payload.surah_id,
-            clerk_user_id=user_id,
-            attempt_id=attempt_id,
-        )
+        try:
+            session_id = await store.create(
+                payload.page_number,
+                payload.surah_id,
+                clerk_user_id=user_id,
+                attempt_id=attempt_id,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         session = await store.get(session_id)
         if session is not None:
             await _insert_attempt_row(session_id, session)
@@ -1039,6 +1222,7 @@ def create_app(
 
         session.last_seq_ack = payload.seq
         session.chunks_received += 1
+        session.last_degraded_reason = None
 
         if session.paused:
             status_event = _build_status_event(
@@ -1071,14 +1255,12 @@ def create_app(
             )
 
             recognize_started_ms = time.perf_counter() * 1000
+            degraded_reason: str | None = None
             if should_call_recognizer:
-                if alignment_mode:
-                    recognition = await anyio.to_thread.run_sync(
-                        recognizer.analyze_chunk,
-                        recognition_input,
-                    )
-                else:
-                    recognition = recognizer.analyze_chunk(recognition_input)
+                recognition, degraded_reason = await _analyze_with_limits(
+                    payload=payload,
+                    recognition_input=recognition_input,
+                )
             else:
                 resolved_level_db = (
                     float(payload.level_db)
@@ -1095,6 +1277,15 @@ def create_app(
                 )
             recognize_ms = (time.perf_counter() * 1000) - recognize_started_ms
 
+            if degraded_reason:
+                session.last_degraded_reason = degraded_reason
+                session.degraded_fallbacks += 1
+                load_state.add("degraded_fallbacks", 1)
+                if degraded_reason == "recognizer_timeout":
+                    session.recognizer_timeouts += 1
+                elif degraded_reason == "recognizer_backpressure":
+                    session.recognizer_backpressure += 1
+
             _apply_shadow_recognition(session, recognition_input, shadow_recognizer)
             gate = _speech_gate_decision(
                 mode=speech_gate_mode,
@@ -1110,6 +1301,16 @@ def create_app(
                 session.chunks_with_speech += 1
 
                 if not alignment_mode and recognition.confidence < CONFIDENCE_THRESHOLD:
+                    session.deltas_blocked_by_gate += 1
+                    status_event = _build_status_event(
+                        session_id=session_id,
+                        session=session,
+                        state="processing",
+                        has_speech=True,
+                        level_db=recognition.level_db,
+                        capabilities={"ws_audio_upload": WS_AUDIO_UPLOAD_ENABLED},
+                    )
+                elif alignment_mode and not _allow_alignment_partial_progress(session, recognition):
                     session.deltas_blocked_by_gate += 1
                     status_event = _build_status_event(
                         session_id=session_id,
@@ -1147,9 +1348,13 @@ def create_app(
                             "chunk_seq": payload.seq,
                             "has_speech": True,
                             "confidence": progress.confidence,
+                            "token_source": recognition.token_source,
                             "confirmed_word_indexes": progress.confirmed_word_indexes,
                             "ts_ms": _now_ms(),
                         }
+                        if session.last_degraded_reason:
+                            delta_event["degraded"] = True
+                            delta_event["degraded_reason"] = session.last_degraded_reason
                         if progress.start_anchor_word_index is not None:
                             delta_event["start_anchor_word_index"] = progress.start_anchor_word_index
                             delta_event["start_anchor_confidence"] = progress.start_anchor_confidence
@@ -1210,6 +1415,11 @@ def create_app(
                     "anchor_word_index": session.anchor_word_index,
                     "anchor_verse_end_word_index": session.anchor_verse_end_word_index,
                     "match_score": delta_event.get("confidence") if delta_event else None,
+                    "token_source": recognition.token_source,
+                    "partial_stability": recognition.partial_stability,
+                    "stt_latency_meta": recognition.stt_latency_meta,
+                    "degraded_reason": session.last_degraded_reason,
+                    "load": load_state.snapshot(),
                     "timing": {
                         "decode_ms": round(decode_ms, 2),
                         "recognize_ms": round(recognize_ms, 2),
@@ -1289,6 +1499,9 @@ def create_app(
                     "paused": session.paused,
                     "recognizer_mode": session.recognizer_mode,
                     "transport_mode": session.transport_mode,
+                    "recognizer_timeouts": session.recognizer_timeouts,
+                    "recognizer_backpressure": session.recognizer_backpressure,
+                    "degraded_fallbacks": session.degraded_fallbacks,
                 }
             ),
         )
@@ -1402,18 +1615,20 @@ def create_app(
                     return
 
                 try:
-                    event = await asyncio.wait_for(
+                    outbound_event = await asyncio.wait_for(
                         queue.get(),
                         timeout=HEARTBEAT_INTERVAL_SECONDS,
                     )
-                    await websocket.send_json(event)
                 except asyncio.TimeoutError:
-                    heartbeat = _build_status_event(
+                    outbound_event = _build_status_event(
                         session_id=session_id,
                         session=state,
                         capabilities={"ws_audio_upload": WS_AUDIO_UPLOAD_ENABLED},
                     )
-                    await websocket.send_json(heartbeat)
+                try:
+                    await websocket.send_json(outbound_event)
+                except (RuntimeError, WebSocketDisconnect):
+                    return
         except WebSocketDisconnect:
             return
         finally:

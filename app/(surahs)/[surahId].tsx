@@ -27,6 +27,7 @@ import {
 } from "react-native";
 import { Gesture } from "react-native-gesture-handler";
 import Animated, {
+  interpolateColor,
   runOnJS,
   useAnimatedStyle,
   useDerivedValue,
@@ -162,6 +163,8 @@ export default function SurahScreen() {
   const [pageIndex, setPageIndex] = useState(initialIndex);
   const hasRestoredRef = useRef(false);
   const [isMini, setIsMini] = useState(false);
+  const [isMiniTransitioning, setIsMiniTransitioning] = useState(false);
+  const [isMiniOverlayMounted, setIsMiniOverlayMounted] = useState(false);
   const [isMiniMenuOpen, setIsMiniMenuOpen] = useState(false);
   const [bookmarkIconXml, setBookmarkIconXml] = useState<string | null>(null);
   const [moonIconXml, setMoonIconXml] = useState<string | null>(null);
@@ -177,13 +180,76 @@ export default function SurahScreen() {
   const baseScaleValue = useSharedValue(NORMAL_SCALE);
   const miniModeValue = useSharedValue(0);
   const lastTapTimestamp = useSharedValue(0);
-  const markerMaskProgress = useDerivedValue<number>(() =>
-    withTiming(1, { duration: MINI_ANIMATION_DURATION_MS }),
+  const markerMaskProgress = useDerivedValue<number>(
+    () => 1 - miniModeValue.value,
   );
 
-  const setMiniMode = useCallback((next: boolean) => {
-    setIsMini(next);
+  const clearMiniTransitioning = useCallback(() => {
+    setIsMiniTransitioning(false);
   }, []);
+
+  const finalizeMiniExit = useCallback(() => {
+    setIsMini(false);
+    setIsMiniOverlayMounted(false);
+    setIsMiniTransitioning(false);
+    setIsMiniMenuOpen(false);
+  }, []);
+
+  const forceExitMiniMode = useCallback(() => {
+    miniModeValue.value = 0;
+    finalizeMiniExit();
+  }, [finalizeMiniExit, miniModeValue]);
+
+  const enterMiniMode = useCallback(() => {
+    if (isLandscape || isMini || isMiniTransitioning) return;
+    setIsMini(true);
+    setIsMiniOverlayMounted(true);
+    setIsMiniTransitioning(true);
+    miniModeValue.value = withTiming(
+      1,
+      { duration: MINI_ANIMATION_DURATION_MS },
+      () => {
+        runOnJS(clearMiniTransitioning)();
+      },
+    );
+  }, [
+    clearMiniTransitioning,
+    isLandscape,
+    isMini,
+    isMiniTransitioning,
+    miniModeValue,
+  ]);
+
+  const exitMiniMode = useCallback(() => {
+    if (isLandscape) {
+      forceExitMiniMode();
+      return;
+    }
+    if ((!isMini && !isMiniOverlayMounted) || isMiniTransitioning) return;
+
+    setIsMiniTransitioning(true);
+    setIsMiniMenuOpen(false);
+    miniModeValue.value = withTiming(
+      0,
+      { duration: MINI_ANIMATION_DURATION_MS },
+      (finished) => {
+        if (finished) {
+          runOnJS(finalizeMiniExit)();
+          return;
+        }
+        runOnJS(clearMiniTransitioning)();
+      },
+    );
+  }, [
+    clearMiniTransitioning,
+    finalizeMiniExit,
+    forceExitMiniMode,
+    isLandscape,
+    isMini,
+    isMiniOverlayMounted,
+    isMiniTransitioning,
+    miniModeValue,
+  ]);
 
   useEffect(() => {
     if (!isMini) setIsMiniMenuOpen(false);
@@ -350,11 +416,10 @@ export default function SurahScreen() {
   useEffect(() => {
     if (!isLandscape) return;
     pinchScale.value = 1;
-    if (isMini) {
-      miniModeValue.value = 0;
-      setIsMini(false);
+    if (isMini || isMiniOverlayMounted) {
+      forceExitMiniMode();
     }
-  }, [isLandscape, isMini, miniModeValue, pinchScale]);
+  }, [forceExitMiniMode, isLandscape, isMini, isMiniOverlayMounted, pinchScale]);
 
   const baseScale = useMemo(() => {
     if (isLandscape) return 1;
@@ -425,7 +490,44 @@ export default function SurahScreen() {
     };
   });
 
-  const gesturesEnabled = !isLandscape && !tasmee.isRunning;
+  const miniOverlayStyle = useAnimatedStyle(() => {
+    const progress = miniModeValue.value;
+    return {
+      opacity: progress,
+      transform: [{ translateY: (1 - progress) * -12 }],
+    };
+  });
+
+  const portraitContainerStyle = useAnimatedStyle(() => ({
+    paddingTop: PAGE_TOP_PADDING + MINI_PAGE_TOP_GAP * miniModeValue.value,
+  }));
+
+  const miniPageCardStyle = useAnimatedStyle(() => {
+    const progress = miniModeValue.value;
+    return {
+      padding: 8 * progress,
+      borderWidth: progress,
+      borderRadius: 18 * progress,
+      borderColor: interpolateColor(
+        progress,
+        [0, 1],
+        ["rgba(207, 229, 226, 0)", MINI_PAGE_CARD_BORDER],
+      ),
+      backgroundColor: interpolateColor(
+        progress,
+        [0, 1],
+        ["rgba(242, 250, 248, 0)", MINI_PAGE_CARD_BG],
+      ),
+      shadowColor: "#000",
+      shadowOpacity: 0.08 * progress,
+      shadowRadius: 10 * progress,
+      shadowOffset: { width: 0, height: 6 },
+      elevation: progress > 0.01 ? 4 : 0,
+    };
+  });
+
+  const gesturesEnabled =
+    !isLandscape && !tasmee.isRunning && !isMiniTransitioning;
 
   const pinch = Gesture.Pinch()
     .enabled(!isMini && gesturesEnabled)
@@ -440,10 +542,7 @@ export default function SurahScreen() {
     .onEnd(() => {
       if (pinchScale.value < MINI_TRIGGER_SCALE) {
         pinchScale.value = 1;
-        miniModeValue.value = withTiming(1, {
-          duration: MINI_ANIMATION_DURATION_MS,
-        });
-        runOnJS(setMiniMode)(true);
+        runOnJS(enterMiniMode)();
       } else if (pinchScale.value < 1) {
         pinchScale.value = 1;
       }
@@ -459,20 +558,9 @@ export default function SurahScreen() {
         lastTapTimestamp.value = 0;
         const next = miniModeValue.value <= 0.5;
         if (next) {
-          miniModeValue.value = withTiming(1, {
-            duration: MINI_ANIMATION_DURATION_MS,
-          });
-          runOnJS(setMiniMode)(true);
+          runOnJS(enterMiniMode)();
         } else {
-          miniModeValue.value = withTiming(
-            0,
-            { duration: MINI_ANIMATION_DURATION_MS },
-            (finished) => {
-              if (finished) {
-                runOnJS(setMiniMode)(false);
-              }
-            },
-          );
+          runOnJS(exitMiniMode)();
         }
         pinchScale.value = 1;
         return;
@@ -575,13 +663,10 @@ export default function SurahScreen() {
       }
 
       if (isMini) {
-        miniModeValue.value = withTiming(0, {
-          duration: MINI_ANIMATION_DURATION_MS,
-        });
-        setIsMini(false);
+        exitMiniMode();
       }
     },
-    [handleSelectSurah, isMini, miniModeValue, router, setQuery, tasmee],
+    [exitMiniMode, handleSelectSurah, isMini, router, setQuery, tasmee],
   );
 
   const carouselIndex = Math.max(0, Math.min(SURAH_ITEMS.length - 1, id - 1));
@@ -594,9 +679,7 @@ export default function SurahScreen() {
   const horizontalPadding = isLandscape
     ? LANDSCAPE_HORIZONTAL_PADDING
     : PAGE_HORIZONTAL_PADDING;
-  const topPadding =
-    (isLandscape ? LANDSCAPE_TOP_PADDING : PAGE_TOP_PADDING) +
-    (isMini && !isLandscape ? MINI_PAGE_TOP_GAP : 0);
+  const topPadding = isLandscape ? LANDSCAPE_TOP_PADDING : PAGE_TOP_PADDING;
   const bottomPadding = isLandscape
     ? LANDSCAPE_BOTTOM_PADDING
     : PAGE_BOTTOM_PADDING;
@@ -792,10 +875,10 @@ export default function SurahScreen() {
         </View>
       </Modal>
 
-      {isMini ? (
-        <View
+      {isMiniOverlayMounted ? (
+        <Animated.View
           className="pt-12 pb-1"
-          pointerEvents="box-none"
+          pointerEvents={isMini ? "box-none" : "none"}
           style={{
             position: "absolute",
             top: 0,
@@ -805,6 +888,7 @@ export default function SurahScreen() {
             zIndex: 5,
           }}
         >
+          <Animated.View style={miniOverlayStyle}>
           <View className="px-5 mb-1">
             <View
               className="flex-row-reverse rounded-full px-4 py-2 items-center gap-2 border"
@@ -906,6 +990,7 @@ export default function SurahScreen() {
               <SurahCarousel
                 data={SURAH_ITEMS}
                 onSelect={handleSelectSurah}
+                activeSurahId={id}
                 initialScrollIndex={carouselIndex}
               />
             </View>
@@ -933,6 +1018,13 @@ export default function SurahScreen() {
               }}
             >
               <View className="flex-row items-center justify-center gap-10">
+                <Pressable
+                  onPress={() => setIsMiniMenuOpen(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open menu"
+                >
+                  <Ionicons name="menu-outline" size={28} color={MUSHAF_ACCENT_DARK} />
+                </Pressable>
                 {bookmarkIconXml ? (
                   <Pressable
                     onPress={handleOpenBookmarkModal}
@@ -982,7 +1074,8 @@ export default function SurahScreen() {
               </View>
             </View>
           </View>
-        </View>
+          </Animated.View>
+        </Animated.View>
       ) : null}
 
       <View
@@ -1020,33 +1113,20 @@ export default function SurahScreen() {
             </View>
           </ScrollView>
         ) : (
-          <View
+          <Animated.View
             className="w-full items-center"
-            style={{
-              paddingHorizontal: horizontalPadding,
-              paddingTop: topPadding,
-              paddingBottom: bottomPadding,
-            }}
+            style={[
+              {
+                paddingHorizontal: horizontalPadding,
+                paddingBottom: bottomPadding,
+              },
+              portraitContainerStyle,
+            ]}
           >
-            <View
-              style={[
-                isMini && {
-                  padding: 8,
-                  backgroundColor: MINI_PAGE_CARD_BG,
-                  borderRadius: 18,
-                  borderWidth: 1,
-                  borderColor: MINI_PAGE_CARD_BORDER,
-                  shadowColor: "#000",
-                  shadowOpacity: 0.08,
-                  shadowRadius: 10,
-                  shadowOffset: { width: 0, height: 6 },
-                  elevation: 4,
-                },
-              ]}
-            >
+            <Animated.View style={miniPageCardStyle}>
               {pageContent}
-            </View>
-          </View>
+            </Animated.View>
+          </Animated.View>
         )}
       </View>
       <BookmarkModal

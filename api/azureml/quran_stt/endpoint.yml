@@ -2,4 +2,7 @@ $schema: https://azuremlschemas.azureedge.net/latest/managedOnlineEndpoint.schem
 name: iqraaai-quran-stt
 auth_mode: key
 description: Quran STT (tarteel-ai/whisper-base-ar-quran) custom container endpoint.
+tags:
+  workload: tasmee-stt
+  latency_tier: low-latency
 

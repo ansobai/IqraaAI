@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -15,9 +15,8 @@ RUN apt-get update \
 
 COPY api/stt_service/requirements.txt ./requirements.txt
 
-# CUDA-enabled PyTorch (cu121) + app deps
+# CTranslate2 / faster-whisper runtime deps
 RUN python3 -m pip install --no-cache-dir --upgrade pip \
-  && python3 -m pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu121 torch==2.2.2 torchaudio==2.2.2 \
   && python3 -m pip install --no-cache-dir -r requirements.txt
 
 COPY api/stt_service ./api/stt_service

@@ -12,7 +12,6 @@ RUN apt-get update \
 
 COPY api/stt_service/requirements.txt ./requirements.txt
 RUN python -m pip install --no-cache-dir --upgrade pip \
-  && python -m pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu torch==2.2.2 torchaudio==2.2.2 \
   && python -m pip install --no-cache-dir -r requirements.txt
 
 COPY api/stt_service ./api/stt_service

@@ -95,13 +95,13 @@ export default function SurahBanner({
   
   switch (variant) {
     case "left":
-      imageSource = require("../assets/images/surah_name_border.png");
+      imageSource = require("../assets/images/overlay-design.jpeg");
       break;
     case "right":
-      imageSource = require("../assets/images/surah_name_border.png");
+      imageSource = require("../assets/images/overlay-design.jpeg");
       break;
     default:
-      imageSource = require("../assets/images/surah_name_border.png");
+      imageSource = require("../assets/images/overlay-design.jpeg");
       break;
   }
 

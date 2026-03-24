@@ -15,7 +15,6 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
-  Image,
   Keyboard,
   LayoutChangeEvent,
   Modal,
@@ -102,7 +101,6 @@ const DOUBLE_TAP_MAX_DURATION = 120;
 const PREFETCH_WINDOW = 3;
 const BOOKMARK_ICON = require("../../assets/images/bookmark-icon.svg");
 const MOON_ICON = require("../../assets/images/moon-icon.svg");
-const MICROPHONE_ICON = require("../../assets/images/microphone.png");
 const MUSHAF_PAGE_BACKGROUND = "#FFFAF2";
 const MUSHAF_ACCENT = "#BFE3F2";
 const MUSHAF_ACCENT_DARK = "#255A6D";
@@ -1061,16 +1059,10 @@ export default function SurahScreen() {
                     opacity: pressed ? 0.8 : 1,
                   })}
                 >
-                  <Image
-                    source={MICROPHONE_ICON}
-                    style={{
-                      width: 22,
-                      height: 22,
-                      tintColor: tasmee.isRunning
-                        ? "#FFFFFF"
-                        : MUSHAF_ACCENT_DARK,
-                    }}
-                    resizeMode="contain"
+                  <Ionicons
+                    name="mic"
+                    size={22}
+                    color={tasmee.isRunning ? "#FFFFFF" : MUSHAF_ACCENT_DARK}
                   />
                 </Pressable>
               </View>

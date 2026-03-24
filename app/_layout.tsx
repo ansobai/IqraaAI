@@ -35,8 +35,9 @@ export default function RootLayout() {
   const [loaded, error] = useFonts({
     UthmanicHafs: require("../assets/fonts/ArbFONTS-Hafs-Font-v0.09.otf"),
     Madani: require("../assets/fonts/KFGQPC Uthmanic Script HAFS Regular.otf"),
-    Scheherazade: require("../assets/fonts/ScheherazadeNew-Regular.ttf"),
-    Amiri: require("../assets/fonts/Amiri-Regular.ttf"),
+    // Fallback aliases until dedicated Scheherazade/Amiri files are added.
+    Scheherazade: require("../assets/fonts/KFGQPC Uthmanic Script HAFS Regular.otf"),
+    Amiri: require("../assets/fonts/ArbFONTS-Hafs-Font-v0.09.otf"),
   });
   const [showStartupLoader, setShowStartupLoader] = useState(true);
 

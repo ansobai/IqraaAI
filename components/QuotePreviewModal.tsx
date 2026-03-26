@@ -57,7 +57,7 @@ const WAQF_MARKER_SPLIT_REGEX = /([\uFBBF\u06DF])/u;
 const WAQF_MARKER_TOKEN_REGEX = /^[\uFBBF\u06DF]$/u;
 const TRAILING_AYAH_DECORATION_REGEX =
   /(?:[\u200E\u200F\u061C\s]*[\u06DD\u06DE\u06E9]\s*[0-9\u0660-\u0669\u06F0-\u06F9]*[\u200E\u200F\u061C\s]*)+$/u;
-const MIN_VERSE_FONT_SIZE = 24;
+const MIN_VERSE_FONT_SIZE = 22;
 const MIN_TAFSIR_FONT_SIZE = 14;
 const MAX_TAFSIR_FONT_SIZE = 20;
 
@@ -232,7 +232,7 @@ export default function QuotePreviewModal({
     .filter((part) => part.length > 0);
 
   const verseCharacterCount = cleanVerseText.length;
-  const maxVerseFontSize = isCompactHeight ? 42 : 48;
+  const maxVerseFontSize = isCompactHeight ? 36 : 40;
   const maxVerseLines = isCompactHeight ? 6 : 7;
   const initialVerseFontSize = useMemo(
     () => getInitialVerseFontSize(verseCharacterCount, maxVerseFontSize),
@@ -332,9 +332,9 @@ export default function QuotePreviewModal({
   const verseLineHeight = Math.round(
     currentVerseFontSize *
       Platform.select({
-        ios: 1.7,
-        android: 1.64,
-        default: 1.68,
+        ios: 1.56,
+        android: 1.5,
+        default: 1.54,
       }),
   );
   const tafsirLineHeight = Math.round(
@@ -643,7 +643,7 @@ export default function QuotePreviewModal({
                         styles.verseAyahEndText,
                         {
                           fontSize: Math.round(currentVerseFontSize * 0.7),
-                          lineHeight: verseLineHeight + 6,
+                          lineHeight: verseLineHeight + 2,
                         },
                       ]}
                     >
@@ -830,7 +830,8 @@ const styles = StyleSheet.create({
   surahBadgeText: {
     fontFamily: "Scheherazade",
     fontSize: 28,
-    lineHeight: 34,
+    lineHeight: 40,
+    paddingTop: 4,
     color: "#204048",
     textAlign: "center",
     writingDirection: "rtl",

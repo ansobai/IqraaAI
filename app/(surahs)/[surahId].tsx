@@ -2,7 +2,6 @@
 import { useAuth } from "@clerk/clerk-expo";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Asset } from "expo-asset";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import React, {
   useCallback,
@@ -33,7 +32,6 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
-import { SvgXml } from "react-native-svg";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import QuranPage from "../../components/QuranPage";
@@ -91,6 +89,9 @@ const LANDSCAPE_BOTTOM_PADDING = 0;
 const NORMAL_SCALE = 1.36;
 const FIRST_PAGES_SCALE = NORMAL_SCALE;
 const MINI_SCALE = 0.85;
+const MINI_LAYOUT_SHIFT_PX = 16;
+const MINI_CAROUSEL_PAGE_GAP_PX = 14;
+const MINI_TOP_PANEL_BASE_PADDING_PX = 40;
 const MINI_TRIGGER_SCALE = 0.7;
 const MINI_ANIMATION_DURATION_MS = 160;
 const MIN_PINCH_SCALE = 0.5;
@@ -99,8 +100,9 @@ const DOUBLE_TAP_WINDOW_MS = 180;
 const DOUBLE_TAP_MAX_DISTANCE = 12;
 const DOUBLE_TAP_MAX_DURATION = 120;
 const PREFETCH_WINDOW = 3;
-const BOOKMARK_ICON = require("../../assets/images/bookmark-icon.svg");
-const MOON_ICON = require("../../assets/images/moon-icon.svg");
+const MINI_BOTTOM_CONTROL_SIZE = 34;
+const MINI_BOTTOM_ICON_SIZE = 22;
+const MINI_BOTTOM_ICON_COLOR = "#000000";
 const MUSHAF_PAGE_BACKGROUND = "#FFFAF2";
 const MUSHAF_ACCENT = "#BFE3F2";
 const MUSHAF_ACCENT_DARK = "#255A6D";
@@ -108,20 +110,6 @@ const MUSHAF_SURFACE = "#EAF6FC";
 const MUSHAF_BORDER = "#C8E3EF";
 const MUSHAF_BORDER_LIGHT = "#F6FCFF";
 const MUSHAF_MUTED = "#5F7886";
-
-const loadSvgAssetXml = async (moduleId: number): Promise<string | null> => {
-  try {
-    const asset = Asset.fromModule(moduleId);
-    await asset.downloadAsync();
-    const uri = asset.localUri ?? asset.uri;
-    if (!uri) return null;
-    const response = await fetch(uri);
-    return await response.text();
-  } catch (error) {
-    console.error("Failed to load SVG asset:", error);
-    return null;
-  }
-};
 
 const getNearbyPages = (pageNumber: number, windowSize: number) =>
   Array.from(
@@ -161,8 +149,6 @@ export default function SurahScreen() {
   const hasRestoredRef = useRef(false);
   const [isMini, setIsMini] = useState(false);
   const [isMiniMenuOpen, setIsMiniMenuOpen] = useState(false);
-  const [bookmarkIconXml, setBookmarkIconXml] = useState<string | null>(null);
-  const [moonIconXml, setMoonIconXml] = useState<string | null>(null);
   const [isBookmarkModalOpen, setIsBookmarkModalOpen] = useState(false);
   const [quoteSelection, setQuoteSelection] =
     useState<QuoteVerseSelection | null>(null);
@@ -248,25 +234,6 @@ export default function SurahScreen() {
     return cancelPrefetch;
   }, [pageIndex]);
 
-  useEffect(() => {
-    let isActive = true;
-    const loadIcons = async () => {
-      const [bookmarkXml, moonXml] = await Promise.all([
-        loadSvgAssetXml(BOOKMARK_ICON),
-        loadSvgAssetXml(MOON_ICON),
-      ]);
-      if (!isActive) return;
-      setBookmarkIconXml(bookmarkXml);
-      setMoonIconXml(moonXml);
-    };
-
-    loadIcons();
-
-    return () => {
-      isActive = false;
-    };
-  }, []);
-
   // Reset index if surahId or page param changes after initial restore
   useEffect(() => {
     if (!hasRestoredRef.current) return;
@@ -285,6 +252,37 @@ export default function SurahScreen() {
 
   const page = PAGES[pageIndex] ?? PAGES[FALLBACK_PAGE_INDEX];
   const currentPageNumber = page?.pageNumber ?? FALLBACK_PAGE_NUMBER;
+  const currentSurahId = useMemo(() => {
+    const fallbackSurahId = getSurahIdForPageNumber(currentPageNumber);
+    const pageSurahs = page?.surahs ?? [];
+
+    if (!pageSurahs.length) return fallbackSurahId;
+
+    let firstValidSurahId: number | null = null;
+    let surahStartingOnPage: number | null = null;
+    let fallbackFoundOnPage = false;
+
+    for (const surah of pageSurahs) {
+      const parsedSurahId = Number(surah.chapterNumber);
+      if (!Number.isFinite(parsedSurahId) || parsedSurahId <= 0) continue;
+
+      if (firstValidSurahId == null) {
+        firstValidSurahId = parsedSurahId;
+      }
+      if (parsedSurahId === fallbackSurahId) {
+        fallbackFoundOnPage = true;
+      }
+
+      const firstVerseNumber = Number(surah.text?.[0]?.verseNumber);
+      if (surahStartingOnPage == null && firstVerseNumber === 1) {
+        surahStartingOnPage = parsedSurahId;
+      }
+    }
+
+    if (surahStartingOnPage != null) return surahStartingOnPage;
+    if (fallbackFoundOnPage) return fallbackSurahId;
+    return firstValidSurahId ?? fallbackSurahId;
+  }, [currentPageNumber, page]);
   const tasmee = useTasmeeSession({
     pageNumber: currentPageNumber,
     surahId: id,
@@ -651,7 +649,10 @@ export default function SurahScreen() {
     ],
   );
 
-  const carouselIndex = Math.max(0, Math.min(SURAH_ITEMS.length - 1, id - 1));
+  const carouselIndex = Math.max(
+    0,
+    Math.min(SURAH_ITEMS.length - 1, currentSurahId - 1),
+  );
   const handleOpenBookmarkModal = useCallback(() => {
     setIsBookmarkModalOpen(true);
   }, []);
@@ -859,7 +860,7 @@ export default function SurahScreen() {
 
       {isMini ? (
         <View
-          className="pt-10 pb-1"
+          className="pb-1"
           pointerEvents="box-none"
           style={{
             position: "absolute",
@@ -867,6 +868,8 @@ export default function SurahScreen() {
             left: 0,
             right: 0,
             bottom: 0,
+            paddingTop:
+              MINI_TOP_PANEL_BASE_PADDING_PX + MINI_LAYOUT_SHIFT_PX,
             zIndex: 5,
           }}
         >
@@ -970,11 +973,15 @@ export default function SurahScreen() {
           ) : null}
 
           {query.length === 0 ? (
-            <View className="h-20 mt-1">
+            <View className="h-20 mt-1 mb-4">
               <SurahCarousel
                 data={SURAH_ITEMS}
                 onSelect={handleSelectSurah}
                 initialScrollIndex={carouselIndex}
+                autoSelectOnMount={false}
+                tapSelectMode="immediate"
+                swipeDwellMs={2000}
+                variant="miniUnderline"
               />
             </View>
           ) : null}
@@ -1002,36 +1009,58 @@ export default function SurahScreen() {
               }}
             >
               <View className="flex-row items-center justify-center gap-10">
-                {bookmarkIconXml ? (
-                  <Pressable
-                    onPress={handleOpenBookmarkModal}
-                    accessibilityRole="button"
-                    accessibilityLabel="Open bookmarks"
-                  >
-                    <SvgXml xml={bookmarkIconXml} width={28} height={28} />
-                  </Pressable>
-                ) : null}
-                {moonIconXml ? (
-                  <SvgXml xml={moonIconXml} width={28} height={28} />
-                ) : null}
+                <Pressable
+                  onPress={handleOpenBookmarkModal}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open bookmarks"
+                  style={({ pressed }) => ({
+                    width: MINI_BOTTOM_CONTROL_SIZE,
+                    height: MINI_BOTTOM_CONTROL_SIZE,
+                    borderRadius: MINI_BOTTOM_CONTROL_SIZE / 2,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    opacity: pressed ? 0.75 : 1,
+                  })}
+                >
+                  <Ionicons
+                    name="bookmark-outline"
+                    size={MINI_BOTTOM_ICON_SIZE}
+                    color={MINI_BOTTOM_ICON_COLOR}
+                  />
+                </Pressable>
+                <View
+                  style={{
+                    width: MINI_BOTTOM_CONTROL_SIZE,
+                    height: MINI_BOTTOM_CONTROL_SIZE,
+                    borderRadius: MINI_BOTTOM_CONTROL_SIZE / 2,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Ionicons
+                    name="moon-outline"
+                    size={MINI_BOTTOM_ICON_SIZE}
+                    color={MINI_BOTTOM_ICON_COLOR}
+                  />
+                </View>
                 <Pressable
                   onPress={() => void playPageFromStart(page)}
                   accessibilityRole="button"
                   accessibilityLabel="Play current page recitation"
                   style={({ pressed }) => ({
-                    width: 34,
-                    height: 34,
-                    borderRadius: 17,
+                    width: MINI_BOTTOM_CONTROL_SIZE,
+                    height: MINI_BOTTOM_CONTROL_SIZE,
+                    borderRadius: MINI_BOTTOM_CONTROL_SIZE / 2,
                     alignItems: "center",
                     justifyContent: "center",
                     backgroundColor: "transparent",
-                    opacity: pressed ? 0.8 : 1,
+                    opacity: pressed ? 0.75 : 1,
                   })}
                 >
                   <Ionicons
                     name={isMiniPageAudioLoading ? "download" : "play"}
-                    size={22}
-                    color={MUSHAF_ACCENT_DARK}
+                    size={MINI_BOTTOM_ICON_SIZE}
+                    color={MINI_BOTTOM_ICON_COLOR}
                   />
                 </Pressable>
                 <Pressable
@@ -1048,21 +1077,19 @@ export default function SurahScreen() {
                     tasmee.isRunning ? "Stop tasmee" : "Start tasmee"
                   }
                   style={({ pressed }) => ({
-                    width: 34,
-                    height: 34,
-                    borderRadius: 17,
+                    width: MINI_BOTTOM_CONTROL_SIZE,
+                    height: MINI_BOTTOM_CONTROL_SIZE,
+                    borderRadius: MINI_BOTTOM_CONTROL_SIZE / 2,
                     alignItems: "center",
                     justifyContent: "center",
-                    backgroundColor: tasmee.isRunning
-                      ? "#BB4A4A"
-                      : "transparent",
-                    opacity: pressed ? 0.8 : 1,
+                    backgroundColor: "transparent",
+                    opacity: pressed ? 0.75 : 1,
                   })}
                 >
                   <Ionicons
                     name="mic"
-                    size={22}
-                    color={tasmee.isRunning ? "#FFFFFF" : MUSHAF_ACCENT_DARK}
+                    size={MINI_BOTTOM_ICON_SIZE}
+                    color={MINI_BOTTOM_ICON_COLOR}
                   />
                 </Pressable>
               </View>
@@ -1118,6 +1145,12 @@ export default function SurahScreen() {
               style={[
                 isMini && {
                   padding: 10,
+                  transform: [
+                    {
+                      translateY:
+                        MINI_LAYOUT_SHIFT_PX + MINI_CAROUSEL_PAGE_GAP_PX,
+                    },
+                  ],
                   backgroundColor: MUSHAF_ACCENT,
                   borderRadius: 20,
                   borderWidth: 2,

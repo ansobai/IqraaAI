@@ -40,10 +40,7 @@ type QuotePreviewModalProps = {
   onBookmarkQuote?: (quote: QuoteVerseSelection) => void | Promise<void>;
   onShareQuote?: (payload: QuoteActionPayload) => void | Promise<void>;
   onDownloadQuote?: (payload: QuoteActionPayload) => void | Promise<void>;
-  onToggleTafsirFocus?: (
-    focused: boolean,
-    quote: QuoteVerseSelection,
-  ) => void;
+  onToggleTafsirFocus?: (focused: boolean, quote: QuoteVerseSelection) => void;
 };
 
 const SURAH_PREFIX = "سورة";
@@ -92,7 +89,10 @@ const getInitialVerseFontSize = (
   return clamp(Math.round(scaled), MIN_VERSE_FONT_SIZE, maxVerseFontSize);
 };
 
-const getInitialTafsirFontSize = (tafsirLength: number, isCompactHeight: boolean) => {
+const getInitialTafsirFontSize = (
+  tafsirLength: number,
+  isCompactHeight: boolean,
+) => {
   const baseSize = isCompactHeight ? 18 : 20;
   const scaled =
     tafsirLength > 780
@@ -123,7 +123,8 @@ const formatQuoteText = ({
   cleanVerseText: string;
   tafsirText: string;
 }) => {
-  const ayahLine = `${cleanVerseText} ${AYAH_END_MARKER}${verseNumberLabel}`.trim();
+  const ayahLine =
+    `${cleanVerseText} ${AYAH_END_MARKER}${verseNumberLabel}`.trim();
   const metadataLine = `${SURAH_PREFIX} ${quote.surahName} - ${AYAH_LABEL} ${verseNumberLabel}`;
   const tafsirBlock = tafsirText.trim()
     ? `\n\n${TAFSIR_LABEL}\n${tafsirText.trim()}`
@@ -219,11 +220,13 @@ export default function QuotePreviewModal({
 
   const { isSavedQuote, toggleSavedQuote } = useSavedQuotes();
 
-  const headerLabel = quote ? `${SURAH_PREFIX} ${quote.surahName}` : SURAH_PREFIX;
+  const headerLabel = quote
+    ? `${SURAH_PREFIX} ${quote.surahName}`
+    : SURAH_PREFIX;
   const numericVerse = Number(quote?.verseNumber);
   const verseNumberLabel = Number.isFinite(numericVerse)
     ? toArabicNumber(numericVerse)
-    : quote?.verseNumber ?? "";
+    : (quote?.verseNumber ?? "");
 
   const cleanVerseText = stripTrailingAyahMarker(quote?.verseText ?? "");
   const verseDisplayText = normalizeVerseTextForDisplay(cleanVerseText);
@@ -260,8 +263,9 @@ export default function QuotePreviewModal({
     () => getInitialTafsirFontSize(effectiveTafsirText.length, isCompactHeight),
     [effectiveTafsirText.length, isCompactHeight],
   );
-  const [currentTafsirFontSize, setCurrentTafsirFontSize] =
-    useState(initialTafsirFontSize);
+  const [currentTafsirFontSize, setCurrentTafsirFontSize] = useState(
+    initialTafsirFontSize,
+  );
   const maxTafsirLines = isTafsirFocused
     ? isCompactHeight
       ? 11
@@ -272,7 +276,11 @@ export default function QuotePreviewModal({
 
   const quoteId = useMemo(() => {
     if (!quote) return "";
-    return buildSavedQuoteId(quote.surahId, quote.verseNumber, quote.pageNumber);
+    return buildSavedQuoteId(
+      quote.surahId,
+      quote.verseNumber,
+      quote.pageNumber,
+    );
   }, [quote]);
   const isQuoteBookmarked = quoteId ? isSavedQuote(quoteId) : false;
 
@@ -304,10 +312,17 @@ export default function QuotePreviewModal({
     (showVerseNavigation ? baseNavButtonSize * 2 : 0) +
     baseRegularButtonSize * 4 +
     basePlayButtonSize;
-  const estimatedDockWidth = baseButtonsWidth + baseSpacing * (controlsCount - 1);
+  const estimatedDockWidth =
+    baseButtonsWidth + baseSpacing * (controlsCount - 1);
   const controlsAvailableWidth = cardWidth - 48;
-  const controlsScale = Math.min(1, controlsAvailableWidth / estimatedDockWidth);
-  const navButtonSize = Math.max(28, Math.round(baseNavButtonSize * controlsScale));
+  const controlsScale = Math.min(
+    1,
+    controlsAvailableWidth / estimatedDockWidth,
+  );
+  const navButtonSize = Math.max(
+    28,
+    Math.round(baseNavButtonSize * controlsScale),
+  );
   const navIconSize = Math.max(
     16,
     Math.round((isNarrowCard ? 18 : 20) * controlsScale),
@@ -320,7 +335,10 @@ export default function QuotePreviewModal({
     18,
     Math.round((isNarrowCard ? 20 : 22) * controlsScale),
   );
-  const playButtonSize = Math.max(50, Math.round(basePlayButtonSize * controlsScale));
+  const playButtonSize = Math.max(
+    50,
+    Math.round(basePlayButtonSize * controlsScale),
+  );
   const playIconSize = Math.max(
     24,
     Math.round((isNarrowCard ? 28 : 32) * controlsScale),
@@ -439,7 +457,10 @@ export default function QuotePreviewModal({
         if (lineCount > maxVerseLines && previousSize > MIN_VERSE_FONT_SIZE) {
           return previousSize - 1;
         }
-        if (lineCount <= maxVerseLines - 2 && previousSize < initialVerseFontSize) {
+        if (
+          lineCount <= maxVerseLines - 2 &&
+          previousSize < initialVerseFontSize
+        ) {
           return previousSize + 1;
         }
         return previousSize;
@@ -457,7 +478,10 @@ export default function QuotePreviewModal({
         if (lineCount > maxTafsirLines && previousSize > MIN_TAFSIR_FONT_SIZE) {
           return previousSize - 1;
         }
-        if (lineCount <= maxTafsirLines - 2 && previousSize < initialTafsirFontSize) {
+        if (
+          lineCount <= maxTafsirLines - 2 &&
+          previousSize < initialTafsirFontSize
+        ) {
           return previousSize + 1;
         }
         return previousSize;
@@ -545,7 +569,8 @@ export default function QuotePreviewModal({
         return;
       }
 
-      const directory = FileSystem.cacheDirectory ?? FileSystem.documentDirectory;
+      const directory =
+        FileSystem.cacheDirectory ?? FileSystem.documentDirectory;
       if (!directory) {
         await Share.share({ message: quoteExportText });
         return;
@@ -591,8 +616,17 @@ export default function QuotePreviewModal({
     >
       <Pressable style={styles.backdrop} onPress={onClose}>
         <TouchableWithoutFeedback>
-          <View style={[styles.card, { width: cardWidth, maxHeight: cardMaxHeight }]}>
-            <Pressable style={styles.closeButton} onPress={onClose} hitSlop={10}>
+          <View
+            style={[
+              styles.card,
+              { width: cardWidth, maxHeight: cardMaxHeight },
+            ]}
+          >
+            <Pressable
+              style={styles.closeButton}
+              onPress={onClose}
+              hitSlop={10}
+            >
               <Ionicons name="close" size={20} color="#7A8D92" />
             </Pressable>
 
@@ -601,7 +635,9 @@ export default function QuotePreviewModal({
                 <Text style={styles.surahBadgeText}>{headerLabel}</Text>
               </View>
 
-              <View style={[styles.verseSection, { height: verseSectionHeight }]}>
+              <View
+                style={[styles.verseSection, { height: verseSectionHeight }]}
+              >
                 <ScrollView
                   style={styles.verseScroll}
                   contentContainerStyle={styles.verseScrollContent}
@@ -661,7 +697,9 @@ export default function QuotePreviewModal({
                 <Text style={styles.tafsirLabel}>{TAFSIR_LABEL}</Text>
               </View>
 
-              <View style={[styles.tafsirSection, { height: tafsirSectionHeight }]}>
+              <View
+                style={[styles.tafsirSection, { height: tafsirSectionHeight }]}
+              >
                 <View style={styles.tafsirAccentLine} />
                 <ScrollView
                   style={styles.tafsirScroll}
@@ -690,19 +728,34 @@ export default function QuotePreviewModal({
 
             <View style={styles.controlsDock}>
               {showVerseNavigation ? (
-                <DockActionButton
-                  icon="chevron-back"
-                  size={navButtonSize}
-                  iconSize={navIconSize}
-                  accessibilityLabel="Next verse"
-                  onPress={() => {
-                    if (canGoNextVerse) {
-                      onNextVerse?.();
-                    }
-                  }}
-                  isDisabled={!canGoNextVerse}
-                  horizontalMargin={dockActionHorizontalMargin}
-                />
+                <>
+                  <DockActionButton
+                    icon="chevron-forward"
+                    size={navButtonSize}
+                    iconSize={navIconSize}
+                    accessibilityLabel="Previous verse"
+                    onPress={() => {
+                      if (canGoPreviousVerse) {
+                        onPreviousVerse?.();
+                      }
+                    }}
+                    isDisabled={!canGoPreviousVerse}
+                    horizontalMargin={dockActionHorizontalMargin}
+                  />
+                  <DockActionButton
+                    icon="chevron-back"
+                    size={navButtonSize}
+                    iconSize={navIconSize}
+                    accessibilityLabel="Next verse"
+                    onPress={() => {
+                      if (canGoNextVerse) {
+                        onNextVerse?.();
+                      }
+                    }}
+                    isDisabled={!canGoNextVerse}
+                    horizontalMargin={dockActionHorizontalMargin}
+                  />
+                </>
               ) : null}
 
               <DockActionButton
@@ -752,22 +805,6 @@ export default function QuotePreviewModal({
                 onPress={() => void handleDownloadPress()}
                 horizontalMargin={dockActionHorizontalMargin}
               />
-
-              {showVerseNavigation ? (
-                <DockActionButton
-                  icon="chevron-forward"
-                  size={navButtonSize}
-                  iconSize={navIconSize}
-                  accessibilityLabel="Previous verse"
-                  onPress={() => {
-                    if (canGoPreviousVerse) {
-                      onPreviousVerse?.();
-                    }
-                  }}
-                  isDisabled={!canGoPreviousVerse}
-                  horizontalMargin={dockActionHorizontalMargin}
-                />
-              ) : null}
             </View>
           </View>
         </TouchableWithoutFeedback>

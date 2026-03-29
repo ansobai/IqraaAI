@@ -156,6 +156,8 @@ export default function SurahScreen() {
   const windowDimensions = useWindowDimensions();
   const isLandscape = windowDimensions.width > windowDimensions.height;
   const { query, setQuery, results, isSearching } = useQuranSearch();
+  const trimmedQuery = query.trim();
+  const hasSearchQuery = trimmedQuery.length > 0;
 
   const pinchScale = useSharedValue(1);
   const baseScaleValue = useSharedValue(NORMAL_SCALE);
@@ -873,44 +875,95 @@ export default function SurahScreen() {
             zIndex: 5,
           }}
         >
-          <View className="px-5 mb-1">
+          <View className="px-4 mb-2">
             <View
-              className="flex-row-reverse rounded-full px-4 py-2 items-center gap-2"
+              className="rounded-[26px] px-4 py-3"
               style={{
-                backgroundColor: MUSHAF_SURFACE,
+                backgroundColor: "#F4FAFE",
                 borderColor: MUSHAF_BORDER,
                 borderWidth: 1,
+                shadowColor: "#3B697A",
+                shadowOpacity: 0.12,
+                shadowRadius: 12,
+                shadowOffset: { width: 0, height: 6 },
+                elevation: 3,
               }}
             >
-              <Ionicons name="search" size={18} color={MUSHAF_MUTED} />
-              <TextInput
-                placeholder="بحث في السور..."
-                placeholderTextColor={MUSHAF_MUTED}
-                className="flex-1 text-right text-base text-[#1F1F1F] font-uthmanic"
-                value={query}
-                onChangeText={setQuery}
-              />
+              <View className="flex-row-reverse items-center gap-2">
+                <View
+                  className="w-8 h-8 rounded-full items-center justify-center"
+                  style={{ backgroundColor: "#DDEFF8" }}
+                >
+                  <Ionicons name="search" size={17} color={MUSHAF_ACCENT_DARK} />
+                </View>
+                <TextInput
+                  placeholder="ابحث في السور والآيات..."
+                  placeholderTextColor={MUSHAF_MUTED}
+                  className="flex-1 text-right text-[20px] text-[#1E2C35] font-uthmanic"
+                  value={query}
+                  onChangeText={setQuery}
+                />
+                {hasSearchQuery ? (
+                  <Pressable
+                    onPress={() => setQuery("")}
+                    accessibilityRole="button"
+                    accessibilityLabel="Clear search"
+                    className="w-8 h-8 rounded-full items-center justify-center"
+                    style={{ backgroundColor: "#E6F3FA" }}
+                  >
+                    <Ionicons name="close" size={16} color={MUSHAF_MUTED} />
+                  </Pressable>
+                ) : null}
+              </View>
             </View>
           </View>
 
-          {query.length > 0 ? (
+          {hasSearchQuery ? (
             <View
-              className="mb-2 w-full rounded-2xl shadow-lg overflow-hidden"
+              className="mx-4 mb-2 rounded-[28px] overflow-hidden"
               style={{
-                maxHeight: windowDimensions.height * 0.55,
+                maxHeight: windowDimensions.height * 0.58,
                 backgroundColor: "#FFFFFF",
                 borderColor: MUSHAF_BORDER,
                 borderWidth: 1,
+                shadowColor: "#3B697A",
+                shadowOpacity: 0.16,
+                shadowRadius: 16,
+                shadowOffset: { width: 0, height: 8 },
+                elevation: 4,
               }}
             >
+              <View
+                className="px-4 py-2 flex-row-reverse items-center justify-between"
+                style={{
+                  backgroundColor: "#F1F9FD",
+                  borderBottomColor: "#DDEEF6",
+                  borderBottomWidth: 1,
+                }}
+              >
+                <Text className="text-lg text-[#2B6072] font-uthmanic font-bold">
+                  النتائج
+                </Text>
+                {isSearching ? (
+                  <ActivityIndicator size="small" color={MUSHAF_ACCENT_DARK} />
+                ) : (
+                  <Text className="text-base text-[#5F7886] font-uthmanic">
+                    {toArabicNumber(results.length)}
+                  </Text>
+                )}
+              </View>
+
               {isSearching ? (
-                <View className="py-6 items-center justify-center">
+                <View className="py-8 items-center justify-center">
                   <ActivityIndicator color={MUSHAF_ACCENT_DARK} />
                 </View>
               ) : results.length === 0 ? (
-                <View className="py-6 items-center justify-center px-5">
-                  <Text className="text-[#1F1F1F] font-uthmanic text-2xl">
+                <View className="py-8 items-center justify-center px-5">
+                  <Text className="text-[#2E434F] font-uthmanic text-2xl">
                     لا توجد نتائج
+                  </Text>
+                  <Text className="text-[#6F8997] font-uthmanic text-lg mt-1">
+                    جرّب كتابة كلمة أطول أو أوضح
                   </Text>
                 </View>
               ) : (
@@ -921,49 +974,100 @@ export default function SurahScreen() {
                       ? `surah-${item.id}`
                       : `verse-${item.surahId}-${item.verseNumber}-${item.pageNumber}`
                   }
-                  contentContainerStyle={{ paddingVertical: 8 }}
                   keyboardShouldPersistTaps="handled"
-                  renderItem={({ item }) => {
-                    const rowClassName =
-                      item.type === "verse"
-                        ? "px-4 py-4 min-h-[72px] border-b border-[#DBECF5] flex-row-reverse items-center justify-between active:bg-[#F5FBFF]"
-                        : "px-4 py-3 border-b border-[#DBECF5] flex-row-reverse items-center justify-between active:bg-[#F5FBFF]";
+                  contentContainerStyle={{ padding: 10, paddingBottom: 12 }}
+                  renderItem={({ item, index }) => {
+                    const isLastRow = index === results.length - 1;
+                    const rowBackground =
+                      item.type === "surah" ? "#EEF8FC" : "#F8FCFE";
+
                     return (
                       <Pressable
                         onPress={() => handleSearchResultPress(item)}
-                        className={rowClassName}
+                        style={({ pressed }) => ({
+                          backgroundColor: pressed ? "#E6F3FA" : rowBackground,
+                          borderColor: "#D7EAF3",
+                          borderWidth: 1,
+                          borderRadius: 18,
+                          paddingHorizontal: 12,
+                          paddingVertical: item.type === "verse" ? 12 : 10,
+                          marginBottom: isLastRow ? 0 : 8,
+                        })}
                       >
-                        {item.type === "surah" ? (
-                          <View className="flex-row-reverse items-center gap-3">
-                            <View className="w-8 h-8 rounded-full bg-[#D7EBF6] items-center justify-center">
-                              <Text className="text-[#4A6776] font-bold text-base">
-                                {toArabicNumber(item.id)}
+                        <View className="flex-row items-start gap-3">
+                          <View
+                            className="w-7 h-7 rounded-full items-center justify-center mt-1"
+                            style={{ backgroundColor: "#E0F1F8" }}
+                          >
+                            <Ionicons
+                              name="chevron-back"
+                              size={14}
+                              color="#83A7B8"
+                            />
+                          </View>
+
+                          {item.type === "surah" ? (
+                            <View className="flex-1 min-w-0">
+                              <View className="flex-row-reverse items-center gap-3">
+                                <View
+                                  className="w-8 h-8 rounded-full items-center justify-center"
+                                  style={{ backgroundColor: "#D4EAF5" }}
+                                >
+                                  <Text className="text-[#385666] font-bold text-base">
+                                    {toArabicNumber(item.id)}
+                                  </Text>
+                                </View>
+                                <Text
+                                  className="text-[28px] text-[#1F2C34] font-uthmanic font-bold text-right flex-1"
+                                  numberOfLines={1}
+                                  style={{ writingDirection: "rtl" }}
+                                >
+                                  سورة {item.name}
+                                </Text>
+                              </View>
+                              <Text
+                                className="text-sm text-[#5D7A88] font-uthmanic mt-1 text-right"
+                                style={{ writingDirection: "rtl" }}
+                              >
+                                انتقال مباشر إلى السورة
                               </Text>
                             </View>
-                            <Text className="text-2xl text-[#1F1F1F] font-uthmanic font-bold">
-                              سورة {item.name}
-                            </Text>
-                          </View>
-                        ) : (
-                          <View className="flex-1">
-                            <View className="flex-row-reverse items-center gap-1 mb-0">
-                              <Text className="text-xl text-[#255A6D] font-bold font-uthmanic">
-                                سورة {item.surahName}
-                              </Text>
-                              <Text className="text-2xl text-[#999] font-uthmanic">
-                                {toArabicNumber(Number(item.verseNumber))}
+                          ) : (
+                            <View className="flex-1 min-w-0">
+                              <View className="flex-row-reverse items-center gap-2 mb-1">
+                                <Text
+                                  className="text-2xl text-[#255A6D] font-bold font-uthmanic"
+                                  numberOfLines={1}
+                                  style={{ writingDirection: "rtl", flex: 1 }}
+                                >
+                                  سورة {item.surahName}
+                                </Text>
+                                <View
+                                  className="px-2 py-0.5 rounded-full"
+                                  style={{ backgroundColor: "#E1F2F9" }}
+                                >
+                                  <Text className="text-lg text-[#4F6F7E] font-uthmanic">
+                                    {toArabicNumber(Number(item.verseNumber))}
+                                  </Text>
+                                </View>
+                              </View>
+
+                              <Text
+                                className="text-[30px] text-[#1F1F1F] font-uthmanic text-right"
+                                numberOfLines={2}
+                                ellipsizeMode="tail"
+                                style={{
+                                  writingDirection: "rtl",
+                                  lineHeight: 44,
+                                  paddingRight: 2,
+                                  paddingLeft: 6,
+                                }}
+                              >
+                                {item.text}
                               </Text>
                             </View>
-                            <Text
-                              className="text-xl text-[#1F1F1F] font-uthmanic text-right"
-                              numberOfLines={1}
-                              ellipsizeMode="clip"
-                            >
-                              {item.text}
-                            </Text>
-                          </View>
-                        )}
-                        <Ionicons name="chevron-back" size={16} color="#CCC" />
+                          )}
+                        </View>
                       </Pressable>
                     );
                   }}
@@ -972,7 +1076,7 @@ export default function SurahScreen() {
             </View>
           ) : null}
 
-          {query.length === 0 ? (
+          {!hasSearchQuery ? (
             <View className="h-20 mt-1 mb-4">
               <SurahCarousel
                 data={SURAH_ITEMS}

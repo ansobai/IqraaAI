@@ -6,8 +6,7 @@ import * as SplashScreen from "expo-splash-screen";
 import { useEffect, useState } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import * as SecureStore from "expo-secure-store";
-import { ActivityIndicator, Text } from "react-native";
-import { warmupQuranSvgAssetsInBackground } from "../utils/quranSvgRegistry";
+import { ActivityIndicator, Text, View } from "react-native";
 
 SplashScreen.preventAutoHideAsync();
 const STARTUP_LOADING_MS = 3000;
@@ -45,7 +44,6 @@ export default function RootLayout() {
 
     let isActive = true;
     void SplashScreen.hideAsync();
-    void warmupQuranSvgAssetsInBackground();
 
     const timer = setTimeout(() => {
       if (isActive) {
@@ -61,15 +59,6 @@ export default function RootLayout() {
 
   if (!loaded && !error) {
     return null;
-  }
-
-  if (showStartupLoader) {
-    return (
-      <GestureHandlerRootView className="flex-1 items-center justify-center bg-[#FFFDF5]">
-        <ActivityIndicator size="large" color="#2E8B57" />
-        <Text className="mt-4 text-base text-[#1F1F1F]">Loading Quran pages...</Text>
-      </GestureHandlerRootView>
-    );
   }
 
   if (!publishableKey) {
@@ -93,6 +82,25 @@ export default function RootLayout() {
               contentStyle: { backgroundColor: "#FFFDF5" },
             }}
           />
+          {showStartupLoader ? (
+            <View
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: "#FFFDF5",
+              }}
+            >
+              <ActivityIndicator size="large" color="#2E8B57" />
+              <Text className="mt-4 text-base text-[#1F1F1F]">
+                Loading Quran pages...
+              </Text>
+            </View>
+          ) : null}
         </GestureHandlerRootView>
       </ClerkLoaded>
     </ClerkProvider>

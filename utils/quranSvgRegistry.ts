@@ -6,7 +6,8 @@ const PAGE_LOADS = new Map<number, Promise<string | null>>();
 const PAGE_ASSET_DOWNLOADS = new Map<number, Promise<string | null>>();
 const PAGE_ASSET_URIS = new Map<number, string>();
 const MAX_CACHED_SVG_PAGES = 24;
-const STARTUP_WARMUP_CHUNK_SIZE = 16;
+const STARTUP_WARMUP_CHUNK_SIZE = 2;
+const STARTUP_WARMUP_STAGGER_MS = 75;
 let startupWarmupPromise: Promise<void> | null = null;
 let hasCompletedStartupWarmup = false;
 
@@ -30,6 +31,36 @@ export const QURAN_PAGE_NUMBERS = Object.keys(QURAN_SVG_ASSET_MODULES)
   .map((key) => Number(key))
   .filter((num) => Number.isFinite(num))
   .sort((a, b) => a - b);
+
+const getOrderedPagesFromCenter = (pageNumbers: number[], startPage?: number) => {
+  const sorted = [...pageNumbers].sort((a, b) => a - b);
+  if (!sorted.length) return sorted;
+  if (!Number.isFinite(startPage)) return sorted;
+  const centerPage = Math.floor(Number(startPage));
+
+  let centerIndex = sorted.indexOf(centerPage);
+  if (centerIndex < 0) {
+    centerIndex = sorted.findIndex((num) => num >= centerPage);
+    if (centerIndex < 0) {
+      centerIndex = sorted.length - 1;
+    }
+  }
+
+  const ordered: number[] = [];
+  for (let offset = 0; offset < sorted.length; offset += 1) {
+    const left = centerIndex - offset;
+    const right = centerIndex + offset;
+
+    if (left >= 0) {
+      ordered.push(sorted[left]);
+    }
+    if (offset > 0 && right < sorted.length) {
+      ordered.push(sorted[right]);
+    }
+  }
+
+  return ordered;
+};
 
 export const getCachedQuranPageSvgXml = (pageNumber: number): string | null => {
   if (!Number.isFinite(pageNumber) || pageNumber < 1) return null;
@@ -113,6 +144,8 @@ export const loadQuranPageSvgXml = async (
 type StartupWarmupOptions = {
   chunkSize?: number;
   pageNumbers?: number[];
+  staggerMs?: number;
+  startPage?: number;
 };
 
 /**
@@ -121,7 +154,9 @@ type StartupWarmupOptions = {
  */
 export const warmupQuranSvgAssetsInBackground = ({
   chunkSize = STARTUP_WARMUP_CHUNK_SIZE,
+  staggerMs = STARTUP_WARMUP_STAGGER_MS,
   pageNumbers = QURAN_PAGE_NUMBERS,
+  startPage,
 }: StartupWarmupOptions = {}): Promise<void> => {
   if (hasCompletedStartupWarmup) {
     return Promise.resolve();
@@ -138,12 +173,18 @@ export const warmupQuranSvgAssetsInBackground = ({
       )
     )
   );
+  const orderedPages = getOrderedPagesFromCenter(unique, startPage);
   const safeChunkSize = Math.max(1, Math.floor(chunkSize));
+  const safeStaggerMs = Math.max(0, Math.floor(staggerMs));
 
   startupWarmupPromise = (async () => {
-    for (let i = 0; i < unique.length; i += safeChunkSize) {
-      const chunk = unique.slice(i, i + safeChunkSize);
+    for (let i = 0; i < orderedPages.length; i += safeChunkSize) {
+      const chunk = orderedPages.slice(i, i + safeChunkSize);
       await Promise.all(chunk.map((pageNumber) => downloadSvgAsset(pageNumber)));
+
+      if (safeStaggerMs > 0 && i + safeChunkSize < orderedPages.length) {
+        await new Promise((resolve) => setTimeout(resolve, safeStaggerMs));
+      }
     }
   })().finally(() => {
     hasCompletedStartupWarmup = true;

@@ -56,6 +56,7 @@ import type { QuoteVerseSelection } from "../../utils/quoteVerseMapping";
 import {
   loadQuranPageSvgXml,
   prefetchQuranPageSvgs,
+  warmupQuranSvgAssetsInBackground,
 } from "../../utils/quranSvgRegistry";
 import { SearchResult } from "../../utils/searchUtils";
 import { toArabicNumber } from "../../utils/toArabicNumbers";
@@ -99,7 +100,15 @@ const MAX_PINCH_SCALE = 3;
 const DOUBLE_TAP_WINDOW_MS = 180;
 const DOUBLE_TAP_MAX_DISTANCE = 12;
 const DOUBLE_TAP_MAX_DURATION = 120;
+const INITIAL_PREFETCH_WINDOW = 1;
 const PREFETCH_WINDOW = 3;
+const INITIAL_PREFETCH_CHUNK_SIZE = 1;
+const INITIAL_PREFETCH_STAGGER_MS = 0;
+const RUNTIME_PREFETCH_CHUNK_SIZE = 4;
+const RUNTIME_PREFETCH_STAGGER_MS = 10;
+const STARTUP_BACKGROUND_WARMUP_DELAY_MS = 500;
+const BACKGROUND_WARMUP_CHUNK_SIZE = 2;
+const BACKGROUND_WARMUP_STAGGER_MS = 75;
 const MINI_BOTTOM_CONTROL_SIZE = 34;
 const MINI_BOTTOM_ICON_SIZE = 22;
 const MINI_BOTTOM_ICON_COLOR = "#000000";
@@ -147,6 +156,10 @@ export default function SurahScreen() {
 
   const [pageIndex, setPageIndex] = useState(initialIndex);
   const hasRestoredRef = useRef(false);
+  const hasStartedBackgroundWarmupRef = useRef(false);
+  const [hasFinishedInitialSvgPrime, setHasFinishedInitialSvgPrime] = useState(
+    false,
+  );
   const [isMini, setIsMini] = useState(false);
   const [isMiniMenuOpen, setIsMiniMenuOpen] = useState(false);
   const [isBookmarkModalOpen, setIsBookmarkModalOpen] = useState(false);
@@ -227,15 +240,6 @@ export default function SurahScreen() {
     };
   }, [forceFirstPage, id, initialIndex, pageParam]);
 
-  useEffect(() => {
-    const pageNumber = PAGES[pageIndex]?.pageNumber;
-    if (!pageNumber) return;
-
-    const nearbyPages = getNearbyPages(pageNumber, PREFETCH_WINDOW);
-    const cancelPrefetch = prefetchQuranPageSvgs(nearbyPages);
-    return cancelPrefetch;
-  }, [pageIndex]);
-
   // Reset index if surahId or page param changes after initial restore
   useEffect(() => {
     if (!hasRestoredRef.current) return;
@@ -254,6 +258,58 @@ export default function SurahScreen() {
 
   const page = PAGES[pageIndex] ?? PAGES[FALLBACK_PAGE_INDEX];
   const currentPageNumber = page?.pageNumber ?? FALLBACK_PAGE_NUMBER;
+
+  useEffect(() => {
+    if (hasFinishedInitialSvgPrime) return;
+
+    let isActive = true;
+    void loadQuranPageSvgXml(currentPageNumber).finally(() => {
+      if (isActive) {
+        setHasFinishedInitialSvgPrime(true);
+      }
+    });
+
+    return () => {
+      isActive = false;
+    };
+  }, [currentPageNumber, hasFinishedInitialSvgPrime]);
+
+  useEffect(() => {
+    const windowSize = hasFinishedInitialSvgPrime
+      ? PREFETCH_WINDOW
+      : INITIAL_PREFETCH_WINDOW;
+    const chunkSize = hasFinishedInitialSvgPrime
+      ? RUNTIME_PREFETCH_CHUNK_SIZE
+      : INITIAL_PREFETCH_CHUNK_SIZE;
+    const staggerMs = hasFinishedInitialSvgPrime
+      ? RUNTIME_PREFETCH_STAGGER_MS
+      : INITIAL_PREFETCH_STAGGER_MS;
+    const nearbyPages = getNearbyPages(currentPageNumber, windowSize);
+    const cancelPrefetch = prefetchQuranPageSvgs(nearbyPages, {
+      chunkSize,
+      staggerMs,
+    });
+    return cancelPrefetch;
+  }, [currentPageNumber, hasFinishedInitialSvgPrime]);
+
+  useEffect(() => {
+    if (!hasFinishedInitialSvgPrime) return;
+    if (hasStartedBackgroundWarmupRef.current) return;
+
+    const timer = setTimeout(() => {
+      hasStartedBackgroundWarmupRef.current = true;
+      void warmupQuranSvgAssetsInBackground({
+        startPage: currentPageNumber,
+        chunkSize: BACKGROUND_WARMUP_CHUNK_SIZE,
+        staggerMs: BACKGROUND_WARMUP_STAGGER_MS,
+      });
+    }, STARTUP_BACKGROUND_WARMUP_DELAY_MS);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [currentPageNumber, hasFinishedInitialSvgPrime]);
+
   const currentSurahId = useMemo(() => {
     const fallbackSurahId = getSurahIdForPageNumber(currentPageNumber);
     const pageSurahs = page?.surahs ?? [];
@@ -570,7 +626,10 @@ export default function SurahScreen() {
   const prefetchTargetPages = useCallback((pageNumber: number) => {
     if (!pageNumber) return;
     void loadQuranPageSvgXml(pageNumber);
-    void prefetchQuranPageSvgs(getNearbyPages(pageNumber, PREFETCH_WINDOW));
+    void prefetchQuranPageSvgs(getNearbyPages(pageNumber, PREFETCH_WINDOW), {
+      chunkSize: INITIAL_PREFETCH_CHUNK_SIZE,
+      staggerMs: INITIAL_PREFETCH_STAGGER_MS,
+    });
   }, []);
 
   const handleSelectSurah = useCallback(

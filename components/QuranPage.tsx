@@ -5,12 +5,15 @@ import Animated, {
   useAnimatedStyle,
 } from "react-native-reanimated";
 import { SvgXml } from "react-native-svg";
+import type { MushafPageLines } from "../utils/mushafData";
+import { applyWordHighlightToSvgXml } from "../utils/quranSvgWordHighlight";
 import {
   getCachedQuranPageSvgXml,
   loadQuranPageSvgXml,
 } from "../utils/quranSvgRegistry";
 
 const DEFAULT_HIGHLIGHT_COLOR = "#2E8B57";
+const DEFAULT_RECITATION_HIGHLIGHT_COLOR = "#D32F2F";
 const PAGE_BACKGROUND_COLOR = "#FFFAF2";
 
 // SVG dimensions (all pages have the same size)
@@ -101,6 +104,9 @@ export interface QuranPageProps {
   pageNumber: number;
   highlightedVerseId?: string;
   highlightColor?: string;
+  activeRecitationWordIndex?: number | null;
+  recitationPageLines?: MushafPageLines | null;
+  recitationHighlightColor?: string;
   shouldRender?: boolean;
   hideSideMarkers?: boolean;
   markerMaskProgress?: SharedValue<number> | Readonly<SharedValue<number>>;
@@ -111,6 +117,9 @@ function QuranPage({
   pageNumber,
   highlightedVerseId,
   highlightColor = DEFAULT_HIGHLIGHT_COLOR,
+  activeRecitationWordIndex = null,
+  recitationPageLines = null,
+  recitationHighlightColor = DEFAULT_RECITATION_HIGHLIGHT_COLOR,
   shouldRender = true,
   hideSideMarkers = false,
   markerMaskProgress,
@@ -155,14 +164,30 @@ function QuranPage({
   const renderedXml = useMemo(() => {
     if (!svgXml) return null;
     const withViewBox = adjustSvgViewBox(svgXml, shouldCropMarkers, pageNumber);
-    if (!highlightedVerseId) return withViewBox;
-    return highlightSvgXml(withViewBox, highlightedVerseId, highlightColor);
+    const withVerseHighlight = highlightedVerseId
+      ? highlightSvgXml(withViewBox, highlightedVerseId, highlightColor)
+      : withViewBox;
+
+    if (recitationPageLines == null) {
+      return withVerseHighlight;
+    }
+
+    return applyWordHighlightToSvgXml({
+      pageNumber,
+      svgXml: withVerseHighlight,
+      pageLines: recitationPageLines,
+      activeWordIndex: activeRecitationWordIndex,
+      highlightColor: recitationHighlightColor,
+    });
   }, [
     svgXml,
     shouldCropMarkers,
     pageNumber,
     highlightedVerseId,
     highlightColor,
+    activeRecitationWordIndex,
+    recitationPageLines,
+    recitationHighlightColor,
   ]);
 
   const isSpecialPage = pageNumber === 1 || pageNumber === 2;

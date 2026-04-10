@@ -29,7 +29,8 @@ const getClerkErrorMessage = (error: unknown) => {
   const first = anyError.errors?.[0];
   const longMessage =
     first && typeof first.longMessage === "string" ? first.longMessage : null;
-  const message = first && typeof first.message === "string" ? first.message : null;
+  const message =
+    first && typeof first.message === "string" ? first.message : null;
   if (longMessage) return longMessage;
   if (message) return message;
 
@@ -82,7 +83,8 @@ export default function AuthScreen({
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [pendingEmailVerification, setPendingEmailVerification] = useState(false);
+  const [pendingEmailVerification, setPendingEmailVerification] =
+    useState(false);
   const [emailVerificationCode, setEmailVerificationCode] = useState("");
 
   const headerTitle = pendingEmailVerification
@@ -260,7 +262,7 @@ export default function AuthScreen({
                       : "text-5xl font-bold text-[#1F1F1F]"
                   }
                 >
-                  Peace be upon you
+                  Glad to see you again
                 </Text>
                 <Text
                   className="text-lg mt-2 text-[#7B8794]"
@@ -319,8 +321,7 @@ export default function AuthScreen({
                   className="mt-3 h-1 rounded-full"
                   style={{
                     width: 44,
-                    backgroundColor:
-                      tab === "signIn" ? PRIMARY : "transparent",
+                    backgroundColor: tab === "signIn" ? PRIMARY : "transparent",
                   }}
                 />
               </Pressable>
@@ -349,7 +350,10 @@ export default function AuthScreen({
               </Pressable>
             </View>
 
-            <View className="flex-1" style={{ marginTop: isCompactHeight ? 14 : 18 }}>
+            <View
+              className="flex-1"
+              style={{ marginTop: isCompactHeight ? 14 : 18 }}
+            >
               {tab === "signIn" ? (
                 <>
                   <View>
@@ -361,7 +365,7 @@ export default function AuthScreen({
                         البريد الإلكتروني
                       </Text>
                     </View>
-                    <View className="bg-white border border-[#E8E1D1] rounded-3xl px-5 py-3.5">
+                    <View className="bg-white border border-[#E8E1D1] rounded-3xl px-5 py-4">
                       <TextInput
                         value={email}
                         onChangeText={setEmail}
@@ -383,7 +387,7 @@ export default function AuthScreen({
                         كلمة المرور
                       </Text>
                     </View>
-                    <View className="bg-white border border-[#E8E1D1] rounded-3xl px-5 py-3.5 flex-row items-center">
+                    <View className="bg-white border border-[#E8E1D1] rounded-3xl px-5 py-4 flex-row items-center">
                       <TextInput
                         value={password}
                         onChangeText={setPassword}
@@ -401,7 +405,9 @@ export default function AuthScreen({
                         }
                       >
                         <Ionicons
-                          name={isPasswordHidden ? "eye-outline" : "eye-off-outline"}
+                          name={
+                            isPasswordHidden ? "eye-outline" : "eye-off-outline"
+                          }
                           size={22}
                           color="#6B7C8A"
                         />
@@ -418,7 +424,10 @@ export default function AuthScreen({
                       accessibilityRole="button"
                       accessibilityLabel="Forgot password"
                     >
-                      <Text style={{ color: PRIMARY }} className="text-base font-semibold">
+                      <Text
+                        style={{ color: PRIMARY }}
+                        className="text-base font-semibold"
+                      >
                         Forgot Password?
                       </Text>
                     </Pressable>
@@ -428,18 +437,16 @@ export default function AuthScreen({
                     <Pressable
                       onPress={onSignInPress}
                       disabled={!isSignInLoaded || isSubmitting}
-                      className="rounded-full items-center justify-center"
-                      style={({ pressed }) => ({
-                        backgroundColor: PRIMARY,
-                        paddingVertical: 16,
+                      className="rounded-full items-center justify-center bg-[#2E8B93]"
+                      style={{
+                        height: 56,
                         shadowColor: "#000",
                         shadowOpacity: 0.08,
                         shadowRadius: 14,
                         shadowOffset: { width: 0, height: 8 },
                         elevation: 4,
-                        opacity:
-                          !isSignInLoaded || isSubmitting ? 0.6 : pressed ? 0.9 : 1,
-                      })}
+                        opacity: !isSignInLoaded || isSubmitting ? 0.6 : 1,
+                      }}
                       accessibilityRole="button"
                       accessibilityLabel="Sign in"
                     >
@@ -466,7 +473,7 @@ export default function AuthScreen({
                       style={({ pressed }) => ({
                         opacity: isSubmitting ? 0.6 : pressed ? 0.85 : 1,
                       })}
-                      className="mt-4 bg-white border border-[#E8E1D1] rounded-3xl px-5 py-3.5 flex-row items-center justify-center"
+                      className="mt-4 bg-white border border-[#E8E1D1] rounded-3xl px-5 py-4 flex-row items-center justify-center"
                       accessibilityRole="button"
                       accessibilityLabel="Sign in with Google"
                     >
@@ -500,7 +507,7 @@ export default function AuthScreen({
                           الاسم الأول
                         </Text>
                       </View>
-                      <View className="bg-white border border-[#E8E1D1] rounded-3xl px-5 py-3.5">
+                      <View className="bg-white border border-[#E8E1D1] rounded-3xl px-5 py-4">
                         <TextInput
                           value={firstName}
                           onChangeText={setFirstName}
@@ -520,7 +527,7 @@ export default function AuthScreen({
                           اسم العائلة
                         </Text>
                       </View>
-                      <View className="bg-white border border-[#E8E1D1] rounded-3xl px-5 py-3.5">
+                      <View className="bg-white border border-[#E8E1D1] rounded-3xl px-5 py-4">
                         <TextInput
                           value={lastName}
                           onChangeText={setLastName}
@@ -541,7 +548,7 @@ export default function AuthScreen({
                         البريد الإلكتروني
                       </Text>
                     </View>
-                    <View className="bg-white border border-[#E8E1D1] rounded-3xl px-5 py-3.5">
+                    <View className="bg-white border border-[#E8E1D1] rounded-3xl px-5 py-4">
                       <TextInput
                         value={email}
                         onChangeText={setEmail}
@@ -563,7 +570,7 @@ export default function AuthScreen({
                         كلمة المرور
                       </Text>
                     </View>
-                    <View className="bg-white border border-[#E8E1D1] rounded-3xl px-5 py-3.5 flex-row items-center">
+                    <View className="bg-white border border-[#E8E1D1] rounded-3xl px-5 py-4 flex-row items-center">
                       <TextInput
                         value={password}
                         onChangeText={setPassword}
@@ -581,7 +588,9 @@ export default function AuthScreen({
                         }
                       >
                         <Ionicons
-                          name={isPasswordHidden ? "eye-outline" : "eye-off-outline"}
+                          name={
+                            isPasswordHidden ? "eye-outline" : "eye-off-outline"
+                          }
                           size={22}
                           color="#6B7C8A"
                         />
@@ -592,23 +601,26 @@ export default function AuthScreen({
                   <View style={{ marginTop: isCompactHeight ? 14 : 18 }}>
                     <Pressable
                       onPress={onCreateAccountPress}
-                      disabled={!isSignUpLoaded || isSubmitting || pendingEmailVerification}
-                      className="rounded-full items-center justify-center"
-                      style={({ pressed }) => ({
-                        backgroundColor: PRIMARY,
-                        paddingVertical: 16,
+                      disabled={
+                        !isSignUpLoaded ||
+                        isSubmitting ||
+                        pendingEmailVerification
+                      }
+                      className="rounded-full items-center justify-center bg-[#2E8B93]"
+                      style={{
+                        height: 48,
                         shadowColor: "#000",
                         shadowOpacity: 0.08,
                         shadowRadius: 14,
                         shadowOffset: { width: 0, height: 8 },
                         elevation: 4,
                         opacity:
-                          !isSignUpLoaded || isSubmitting || pendingEmailVerification
+                          !isSignUpLoaded ||
+                          isSubmitting ||
+                          pendingEmailVerification
                             ? 0.6
-                            : pressed
-                              ? 0.9
-                              : 1,
-                      })}
+                            : 1,
+                      }}
                       accessibilityRole="button"
                       accessibilityLabel="Create account"
                     >
@@ -640,7 +652,7 @@ export default function AuthScreen({
                               Ø±Ù…Ø² Ø§Ù„ØªØ­Ù‚Ù‚
                             </Text>
                           </View>
-                          <View className="bg-white border border-[#E8E1D1] rounded-3xl px-5 py-3.5">
+                          <View className="bg-white border border-[#E8E1D1] rounded-3xl px-5 py-4">
                             <TextInput
                               value={emailVerificationCode}
                               onChangeText={setEmailVerificationCode}
@@ -657,10 +669,10 @@ export default function AuthScreen({
                         <Pressable
                           onPress={onVerifyEmailPress}
                           disabled={isSubmitting}
-                          className="mt-4 rounded-full items-center justify-center"
+                          className="mt-4 rounded-full items-center justify-center bg-[#2E8B93]"
                           style={({ pressed }) => ({
-                            backgroundColor: PRIMARY,
-                            paddingVertical: 16,
+                            minHeight: 64,
+                            paddingVertical: 18,
                             shadowColor: "#000",
                             shadowOpacity: 0.08,
                             shadowRadius: 14,
@@ -720,7 +732,7 @@ export default function AuthScreen({
                           style={({ pressed }) => ({
                             opacity: isSubmitting ? 0.6 : pressed ? 0.85 : 1,
                           })}
-                          className="mt-4 bg-white border border-[#E8E1D1] rounded-3xl px-5 py-3.5 flex-row items-center justify-center"
+                          className="mt-4 bg-white border border-[#E8E1D1] rounded-3xl px-5 py-4 flex-row items-center justify-center"
                           accessibilityRole="button"
                           accessibilityLabel="Sign up with Google"
                         >

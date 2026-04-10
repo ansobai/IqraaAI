@@ -54,6 +54,10 @@ import {
 } from "../../utils/mushafData";
 import type { QuoteVerseSelection } from "../../utils/quoteVerseMapping";
 import {
+  buildPageVerseWordIndexMap,
+  resolvePageRecitationWordIndex,
+} from "../../utils/pageRecitationWordMap";
+import {
   loadQuranPageSvgXml,
   prefetchQuranPageSvgs,
   warmupQuranSvgAssetsInBackground,
@@ -348,6 +352,8 @@ export default function SurahScreen() {
   const {
     playVerse,
     playPageFromStart,
+    pause: pauseRecitation,
+    resume: resumeRecitation,
     stop: stopRecitation,
     state: recitationState,
   } = useQuranRecitationPlayer({
@@ -360,6 +366,29 @@ export default function SurahScreen() {
     recitationState.mode === "verse" && recitationState.status === "loading";
   const isMiniPageAudioLoading =
     recitationState.mode === "page" && recitationState.status === "loading";
+  const isMiniPageAudioPlaying =
+    recitationState.mode === "page" && recitationState.status === "playing";
+  const isMiniPageAudioPaused =
+    recitationState.mode === "page" && recitationState.status === "paused";
+  const recitationVerseWordMap = useMemo(
+    () => buildPageVerseWordIndexMap(page, tasmee.pageData),
+    [page, tasmee.pageData],
+  );
+  const activeRecitationWordIndex = useMemo(() => {
+    if (recitationState.mode !== "page") return null;
+    if (recitationState.wordSyncSource !== "timed") return null;
+    return resolvePageRecitationWordIndex(
+      recitationVerseWordMap,
+      recitationState.currentVerse,
+      recitationState.currentWordInVerse,
+    );
+  }, [
+    recitationState.currentVerse,
+    recitationState.currentWordInVerse,
+    recitationState.mode,
+    recitationState.wordSyncSource,
+    recitationVerseWordMap,
+  ]);
   const quoteFeatureEnabled = !isMini && !tasmee.isRunning;
   const quoteVerseSequence = useMemo<QuoteVerseSelection[]>(
     () =>
@@ -588,12 +617,20 @@ export default function SurahScreen() {
   const renderPage = useCallback(
     ({ item, index }: { item: number; index: number }) => {
       const isActivePage = index === pageIndex;
+      const shouldHighlightRecitationWord =
+        isActivePage && item === currentPageNumber;
       return (
         <View style={{ flex: 1 }}>
           <QuranPage
             pageNumber={item}
             markerMaskProgress={markerMaskProgress}
             pageWidth={pageSize.width}
+            activeRecitationWordIndex={
+              shouldHighlightRecitationWord ? activeRecitationWordIndex : null
+            }
+            recitationPageLines={
+              shouldHighlightRecitationWord ? tasmee.pageData : null
+            }
           />
           {isActivePage && quoteFeatureEnabled ? (
             <QuoteLongPressOverlay
@@ -608,12 +645,15 @@ export default function SurahScreen() {
       );
     },
     [
+      activeRecitationWordIndex,
+      currentPageNumber,
       handleQuoteDetected,
       markerMaskProgress,
       pageIndex,
       pageSize.height,
       pageSize.width,
       quoteFeatureEnabled,
+      tasmee.pageData,
     ],
   );
 
@@ -1186,30 +1226,52 @@ export default function SurahScreen() {
                   })}
                 >
                   <Ionicons
-                    name="bookmark-outline"
+                    name="bookmark"
                     size={MINI_BOTTOM_ICON_SIZE}
                     color={MINI_BOTTOM_ICON_COLOR}
                   />
                 </Pressable>
-                <View
-                  style={{
+                <Pressable
+                  onPress={() => {
+                    router.push("/(auth)/sign-in");
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Go to sign in"
+                  style={({ pressed }) => ({
                     width: MINI_BOTTOM_CONTROL_SIZE,
                     height: MINI_BOTTOM_CONTROL_SIZE,
                     borderRadius: MINI_BOTTOM_CONTROL_SIZE / 2,
                     alignItems: "center",
                     justifyContent: "center",
-                  }}
+                    opacity: pressed ? 0.75 : 1,
+                  })}
                 >
                   <Ionicons
-                    name="moon-outline"
+                    name="person-circle"
                     size={MINI_BOTTOM_ICON_SIZE}
                     color={MINI_BOTTOM_ICON_COLOR}
                   />
-                </View>
+                </Pressable>
                 <Pressable
-                  onPress={() => void playPageFromStart(page)}
+                  onPress={() => {
+                    if (isMiniPageAudioPlaying) {
+                      void pauseRecitation();
+                      return;
+                    }
+                    if (isMiniPageAudioPaused) {
+                      void resumeRecitation();
+                      return;
+                    }
+                    void playPageFromStart(page);
+                  }}
                   accessibilityRole="button"
-                  accessibilityLabel="Play current page recitation"
+                  accessibilityLabel={
+                    isMiniPageAudioPlaying
+                      ? "Pause current page recitation"
+                      : isMiniPageAudioPaused
+                        ? "Resume current page recitation"
+                        : "Play current page recitation"
+                  }
                   style={({ pressed }) => ({
                     width: MINI_BOTTOM_CONTROL_SIZE,
                     height: MINI_BOTTOM_CONTROL_SIZE,
@@ -1221,7 +1283,13 @@ export default function SurahScreen() {
                   })}
                 >
                   <Ionicons
-                    name={isMiniPageAudioLoading ? "download" : "play"}
+                    name={
+                      isMiniPageAudioLoading
+                        ? "download"
+                        : isMiniPageAudioPlaying
+                          ? "pause"
+                          : "play"
+                    }
                     size={MINI_BOTTOM_ICON_SIZE}
                     color={MINI_BOTTOM_ICON_COLOR}
                   />

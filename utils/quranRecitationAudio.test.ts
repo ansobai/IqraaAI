@@ -6,6 +6,9 @@ import {
   buildPageVerseQueue,
   buildVerseAudioCandidates,
   formatVerseAudioKey,
+  formatVerseMapKey,
+  normalizeTimedWordSegments,
+  resolveCurrentWordIndexFromSegments,
 } from "./quranRecitationAudio";
 
 test("formatVerseAudioKey pads surah and verse into SSSAAA", () => {
@@ -62,4 +65,43 @@ test("buildPageVerseQueue preserves verse order across multi-surah pages", () =>
     { surahId: 114, verseNumber: "1" },
     { surahId: 114, verseNumber: "2" },
   ]);
+});
+
+test("formatVerseMapKey normalizes surah and verse values", () => {
+  assert.equal(formatVerseMapKey(3, 10), "3:10");
+  assert.equal(formatVerseMapKey("003", "010"), "3:10");
+  assert.equal(formatVerseMapKey("bad", "0"), "1:1");
+});
+
+test("normalizeTimedWordSegments sorts and merges duplicate word segments", () => {
+  const normalized = normalizeTimedWordSegments([
+    [0, 2, 300, 450],
+    [0, 1, 100, 200],
+    [9, 2, 250, 500],
+    [1, 3, 501, 700],
+    ["x", 4, 800, 900],
+  ]);
+
+  assert.deepEqual(normalized, [
+    { wordIndex: 0, startMs: 100, endMs: 200 },
+    { wordIndex: 1, startMs: 250, endMs: 500 },
+    { wordIndex: 2, startMs: 501, endMs: 700 },
+    { wordIndex: 3, startMs: 800, endMs: 900 },
+  ]);
+});
+
+test("resolveCurrentWordIndexFromSegments handles boundary positions", () => {
+  const segments = [
+    { wordIndex: 0, startMs: 100, endMs: 200 },
+    { wordIndex: 1, startMs: 300, endMs: 400 },
+    { wordIndex: 2, startMs: 450, endMs: 550 },
+  ];
+
+  assert.equal(resolveCurrentWordIndexFromSegments([], 120), null);
+  assert.equal(resolveCurrentWordIndexFromSegments(segments, 0), 0);
+  assert.equal(resolveCurrentWordIndexFromSegments(segments, 150), 0);
+  assert.equal(resolveCurrentWordIndexFromSegments(segments, 250), 0);
+  assert.equal(resolveCurrentWordIndexFromSegments(segments, 300), 1);
+  assert.equal(resolveCurrentWordIndexFromSegments(segments, 430), 1);
+  assert.equal(resolveCurrentWordIndexFromSegments(segments, 551), 2);
 });

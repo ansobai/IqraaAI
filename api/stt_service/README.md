@@ -107,7 +107,9 @@ Use these together with deployment min instances (`instance_count >= 1`) to avoi
 
 If `STT_AUTH_TOKEN` is set, clients must send `Authorization: Bearer <token>`.
 
-## Local Run
+If you prefer a CPU `whisper.cpp` backend instead of transformers, use the parallel service in `api/stt_service_whisper_cpp` (same `/score` contract) and its deployment templates under `api/azureml/quran_stt_whisper_cpp`.
+
+## Local run
 
 ```bash
 python -m pip install -r api/stt_service/requirements.txt

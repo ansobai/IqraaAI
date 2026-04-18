@@ -1,6 +1,7 @@
 # Azure ML Online Endpoint (Quran STT, Phase 1)
 
 This template deploys `api/stt_service` as an Azure ML managed online endpoint for Tasmee.
+For the additive CPU `whisper.cpp` service, see `api/azureml/quran_stt_whisper_cpp`.
 
 Phase 1 goals implemented here:
 

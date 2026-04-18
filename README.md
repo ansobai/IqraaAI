@@ -1,182 +1,71 @@
-# IqraaAI (Expo + FastAPI + Postgres)
+# IqraaAI
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+IqraaAI helps users practice Qur'an recitation with real-time feedback. The mobile app captures recitation audio, the backend scores progress word-by-word, and the client receives guided correction signals during the session.
 
-## Get started
+## Stack
 
-1. Install dependencies
+- Frontend: Expo / React Native
+- Backend API: FastAPI
+- Tasmee service: FastAPI WebSocket + chunk scoring
+- STT options:
+  - `api/stt_service` (transformers/faster-whisper path)
+  - `api/stt_service_whisper_cpp` (CPU whisper.cpp path)
+- Database: Postgres
 
-   ```bash
-   npm install
-   ```
+## Quick Start
 
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-## Auth (Clerk)
-
-1. Copy `.env.example` to `.env`
-2. Set `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` to your Clerk publishable key
-3. Set `EXPO_PUBLIC_API_URL` (example: `http://localhost:8000`)
-4. Optional for split deployment: set `EXPO_PUBLIC_TASMEE_API_URL` to a separate Tasmee service URL.
-
-> Android emulator note: if you use `http://localhost:8000`, the app automatically rewrites it to `http://10.0.2.2:8000` on Android.
-
-## Backend API (FastAPI)
-
-1. Install Python deps
-
-   ```bash
-   python -m pip install -r api/requirements.txt
-   ```
-
-2. Configure backend env
-
-   ```bash
-   cp api/.env.example api/.env
-   ```
-
-   Required:
-   - `DATABASE_URL`
-   - `CLERK_ISSUER` (must match the JWT `iss` claim)
-
-3. Apply DB schema
-
-   ```bash
-   python api/scripts/apply_schema.py
-   ```
-
-4. Run the API
-
-   ```bash
-   python -m uvicorn api.app.main:app --reload --port 8000
-   ```
-
-## Tasmee Service (Standalone, Cloud Run Safe)
-
-This repo includes a standalone Tasmee service entrypoint that does not touch profile backend routes:
+1. Install app dependencies:
 
 ```bash
-python -m uvicorn api.app.tasmee_main:app --reload --port 8080
+npm install
 ```
 
-Key Tasmee env flags (`api/.env.example`):
-
-- `TASMEE_RECOGNIZER_MODE=heuristic|google|remote|remote_ws|openai` (use a non-`heuristic` mode to actually verify recitation)
-- `TASMEE_RECOGNIZER_SHADOW=true|false`
-- `TASMEE_GOOGLE_RECOGNIZER` (required for `google` mode)
-- `TASMEE_REMOTE_STT_URL` (required for `remote` mode)
-- `TASMEE_REMOTE_STT_WS_URL` (required for `remote_ws` mode)
-- `OPENAI_API_KEY` (required for `openai` mode)
-- `TASMEE_HARD_SPEECH_LEVEL_DB_THRESHOLD` (default `-35`)
-- `TASMEE_PAUSE_SILENCE_SECONDS` (default `10`)
-
-Cloud Run deploy script:
-
-```powershell
-./api/scripts/deploy_tasmee_cloud_run.ps1 `
-  -ProjectId <your-project-id> `
-  -Region me-central1 `
-  -RecognizerMode remote `
-  -RemoteSttUrl <https://your-stt-endpoint> `
-  -RemoteSttBearerToken <optional-token>
-```
-
-## Quran STT (Self-hosted model on Azure ML)
-
-If you want a Qur'an-tuned Whisper model (e.g. `tarteel-ai/whisper-base-ar-quran`), you can deploy a separate STT service and point tasmee at it using `TASMEE_RECOGNIZER_MODE=remote`.
-
-- STT service: `api/stt_service/README.md`
-- Azure ML endpoint templates: `api/azureml/quran_stt/README.md`
-
-## Phase 0 Baseline Harness
-
-Run the baseline benchmark to measure:
-
-- client-to-partial latency (`feedback.delta` first event)
-- client-to-final latency (last `feedback.delta` after uploads finish)
-- p50/p95, failure rate, and cost per audio minute
+2. Start Expo:
 
 ```bash
-python api/scripts/run_tasmee_benchmark.py \
-  --tasmee-base-url http://127.0.0.1:8080 \
-  --corpus api/benchmarks/tasmee_corpus.baseline.json \
-  --stt-hourly-usd 1.20 \
-  --tasmee-hourly-usd 0.35
+npx expo start
 ```
 
-Artifacts:
-
-- `api/benchmarks/reports/tasmee_baseline_latest.json`
-- `api/benchmarks/reports/tasmee_baseline_latest.md`
-
-## Phase 1 Region and Warm Endpoint Settings
-
-- Deploy Tasmee compute and Azure ML workspace in the same region.
-- Use GPU deployment defaults in `api/azureml/quran_stt/deployment.yml`.
-- Keep `instance_count >= 1`.
-- Enable model preload:
-  - `STT_PRELOAD_MODEL=true`
-  - `STT_FAIL_ON_PRELOAD_ERROR=true`
-- Optional Tasmee guard:
-  - `TASMEE_EXPECTED_STT_REGION=<azure-region>`
-  - `TASMEE_STRICT_STT_REGION_CHECK=true`
-
-## Phase 2 Streaming WS Settings
-
-- `TASMEE_RECOGNIZER_MODE=remote_ws`
-- `TASMEE_REMOTE_STT_PROTOCOL_VERSION=2`
-- `TASMEE_REMOTE_STT_FRAME_MS=30` (20-40)
-- `TASMEE_REMOTE_STT_SAMPLE_RATE_HZ=16000`
-- `TASMEE_FFMPEG_BIN=ffmpeg` (Tasmee decodes client chunks to PCM frames before streaming)
-
-## Phase 3 Low-Latency STT Runtime
-
-STT service now uses `faster-whisper` runtime with streaming partial decode and rolling context windows.
-
-- `STT_MODEL_ID=<ctranslate2-model-id>`
-- `STT_USE_CUDA=true`
-- `STT_COMPUTE_TYPE=float16` (GPU) or `int8` (CPU)
-- `STT_STREAM_PARTIAL_INTERVAL_MS`
-- `STT_STREAM_ROLLING_CONTEXT_MS`
-
-## Database (Postgres)
-
-- Schema: `db/schema.sql`
-- Supabase data migration (optional): `db/MIGRATION.md`
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+3. Configure backend env:
 
 ```bash
-npm run reset-project
+copy api\.env.example api\.env
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+4. Run backend API:
 
-## Learn more
+```bash
+python -m pip install -r api/requirements.txt
+python -m uvicorn api.app.main:app --reload --port 8000
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+5. Run STT service (pick one):
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+```bash
+python -m pip install -r api/stt_service/requirements.txt
+python -m uvicorn api.stt_service.app:app --reload --port 8010
+```
 
-## Join the community
+or
 
-Join our community of developers creating universal apps.
+```bash
+python -m pip install -r api/stt_service_whisper_cpp/requirements.txt
+python -m uvicorn api.stt_service_whisper_cpp.app:app --host 127.0.0.1 --port 8010
+```
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## Current Whisper.cpp Remote Path
+
+In `api/.env`:
+
+- `TASMEE_RECOGNIZER_MODE=remote`
+- `TASMEE_REMOTE_STT_URL=http://127.0.0.1:8010/score`
+- `STT_WCPP_MODEL_PATH=<absolute path to converted ggml model>`
+- `STT_WCPP_BIN=<absolute path to whisper-cli.exe>`
+
+## Docs
+
+- Tasmee STT (transformers): `api/stt_service/README.md`
+- Tasmee STT (whisper.cpp): `api/stt_service_whisper_cpp/README.md`
+- Azure ML templates (transformers): `api/azureml/quran_stt/README.md`
+- Azure ML templates (whisper.cpp): `api/azureml/quran_stt_whisper_cpp/README.md`
+- DB schema: `db/schema.sql`

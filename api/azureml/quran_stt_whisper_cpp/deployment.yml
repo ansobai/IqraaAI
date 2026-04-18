@@ -1,0 +1,34 @@
+$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineDeployment.schema.json
+name: blue
+endpoint_name: iqraaai-quran-stt-whisper-cpp
+
+# IMPORTANT: replace with your ACR login server + image tag.
+environment:
+  image: <YOUR_ACR_LOGIN_SERVER>/iqraaai-quran-stt-whisper-cpp:latest
+  inference_config:
+    scoring_route:
+      path: /score
+      port: 8010
+    liveness_route:
+      path: /healthz
+      port: 8010
+    readiness_route:
+      path: /healthz
+      port: 8010
+
+environment_variables:
+  PORT: "8010"
+  STT_WCPP_LANGUAGE: ar
+  STT_WCPP_TASK: transcribe
+  STT_WCPP_TIMEOUT_SECONDS: "120"
+  # REQUIRED: model file path as seen inside the running container.
+  # Provide this file via your image build process or mounted runtime path.
+  STT_WCPP_MODEL_PATH: /models/ggml-model.bin
+  # Optional: only set if you want service-level bearer auth inside the container.
+  # STT_AUTH_TOKEN: <shared-secret>
+
+instance_type: Standard_DS3_v2
+instance_count: 1
+
+request_settings:
+  request_timeout_ms: 60000

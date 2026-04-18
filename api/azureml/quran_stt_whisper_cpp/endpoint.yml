@@ -1,0 +1,4 @@
+$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineEndpoint.schema.json
+name: iqraaai-quran-stt-whisper-cpp
+auth_mode: key
+description: Quran STT (whisper.cpp CPU) custom container endpoint.
